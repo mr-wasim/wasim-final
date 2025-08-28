@@ -1,0 +1,27 @@
+{
+  "name": "chimney-crm-nextjs",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "echo \"No lint configured\""
+  },
+  "dependencies": {
+    "autoprefixer": "10.4.20",
+    "bcryptjs": "^2.4.3",
+    "cookie": "^1.0.2",
+    "date-fns": "3.6.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "6.8.0",
+    "next": "14.2.5",
+    "papaparse": "5.4.1",
+    "postcss": "8.4.47",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-hot-toast": "2.4.1",
+    "react-signature-canvas": "1.0.6",
+    "tailwindcss": "3.4.10"
+  }
+}

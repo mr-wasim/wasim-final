@@ -1,0 +1,13 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #__next { height: 100%; }
+body { @apply bg-gray-50 text-gray-900; }
+.btn { @apply px-4 py-2 rounded-2xl shadow-md hover:shadow-lg transition; }
+.card { @apply bg-white rounded-2xl shadow p-4; }
+.input { @apply w-full border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500; }
+.label { @apply text-sm font-medium text-gray-600; }
+.badge { @apply px-2 py-1 rounded-full text-xs font-semibold; }
+.skeleton { @apply animate-pulse bg-gray-200 rounded; }
