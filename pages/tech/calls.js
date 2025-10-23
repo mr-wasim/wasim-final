@@ -100,7 +100,7 @@ export default function Calls() {
     }
   }
 
-  // ✅ Smart Navigation Handler (App + Browser Fallback)
+  // ✅ Universal Navigation Handler
   function startNavigation(address) {
     if (!address) {
       toast.error("No address found!");
@@ -114,28 +114,10 @@ export default function Calls() {
           const origin = `${latitude},${longitude}`;
           const destination = encodeURIComponent(address);
 
-          // Detect if user is on mobile
-          const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+          // Universal Google Maps link - opens app if installed
+          const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
 
-          if (isMobile) {
-            // Try opening the Google Maps app
-            const appUrl = `comgooglemaps://?saddr=${origin}&daddr=${destination}&directionsmode=driving`;
-
-            // If app fails, fallback to browser after small delay
-            const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-
-            // Open the app first
-            window.location.href = appUrl;
-
-            // Fallback after 1 second if app isn't installed
-            setTimeout(() => {
-              window.open(fallbackUrl, "_blank");
-            }, 1000);
-          } else {
-            // Desktop fallback
-            const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-            window.open(mapsUrl, "_blank");
-          }
+          window.open(mapsUrl, "_blank");
         },
         (err) => {
           toast.error("Please enable location access to start route.");
@@ -223,7 +205,7 @@ export default function Calls() {
                   Call
                 </a>
 
-                {/* ✅ LIVE NAVIGATION FIXED */}
+                {/* ✅ LIVE NAVIGATION */}
                 <button
                   className="btn bg-gray-100"
                   onClick={() => startNavigation(call.address)}
