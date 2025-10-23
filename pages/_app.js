@@ -1,13 +1,11 @@
-// pages/_app.js
+
 import '../styles/globals.css'
-import { Toaster } from 'react-hot-toast'
-import RequireLocation from '../components/RequireLocation'
+import { useEffect, useState } from 'react'
+import toast, { Toaster } from 'react-hot-toast'
 
 export default function MyApp({ Component, pageProps }){
-  return (
-    <RequireLocation>
-      <Toaster position="top-right" />
-      <Component {...pageProps} />
-    </RequireLocation>
-  )
-}
+  return (<>
+    <Toaster position="top-right" />
+    <Component {...pageProps} />
+  </>)
+} 
