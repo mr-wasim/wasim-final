@@ -13,7 +13,7 @@ export default function Calls() {
   const [count, setCount] = useState(0);
   const loadingRef = useRef(false);
 
-  // ✅ Load calls
+  // Load calls
   async function load(showToast = false) {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -60,7 +60,7 @@ export default function Calls() {
     }
   }
 
-  // ✅ Authentication
+  // Authentication
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me");
@@ -72,18 +72,18 @@ export default function Calls() {
     })();
   }, []);
 
-  // ✅ Refresh on tab/page change
+  // Refresh on tab/page change
   useEffect(() => {
     if (user) load(false);
   }, [tab, page]);
 
-  // ✅ Auto-refresh every 30s
+  // Auto-refresh every 30s
   useEffect(() => {
     const t = setInterval(() => load(false), 30000);
     return () => clearInterval(t);
   }, [tab, page]);
 
-  // ✅ Update call status
+  // Update call status
   async function updateStatus(id, status) {
     try {
       const r = await fetch("/api/tech/update-call", {
@@ -100,7 +100,7 @@ export default function Calls() {
     }
   }
 
-  // ✅ Universal Navigation Handler
+  // Mobile-Only Navigation
   function startNavigation(address) {
     if (!address) {
       toast.error("No address found!");
@@ -113,17 +113,23 @@ export default function Calls() {
           const { latitude, longitude } = pos.coords;
           const origin = `${latitude},${longitude}`;
           const destination = encodeURIComponent(address);
+          const ua = navigator.userAgent || "";
 
-          // Universal Google Maps link - opens app if installed
-          const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-
-          window.open(mapsUrl, "_blank");
+          if (/Android/i.test(ua)) {
+            // Android: open Google Maps app directly
+            const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+            window.location.href = url;
+          } else if (/iPhone|iPad|iPod/i.test(ua)) {
+            // iOS: open Apple Maps app
+            const url = `maps://?saddr=${origin}&daddr=${destination}&dirflg=d`;
+            window.location.href = url;
+          } else {
+            // Desktop: show toast
+            toast.error("Please open this on a mobile device to launch Google Maps.");
+          }
         },
         (err) => {
-          toast.error("Please enable location access to start route.");
-          const destination = encodeURIComponent(address);
-          const fallbackUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
-          window.open(fallbackUrl, "_blank");
+          toast.error("Please enable location to start navigation.");
         }
       );
     } else {
@@ -205,7 +211,7 @@ export default function Calls() {
                   Call
                 </a>
 
-                {/* ✅ LIVE NAVIGATION */}
+                {/* LIVE NAVIGATION */}
                 <button
                   className="btn bg-gray-100"
                   onClick={() => startNavigation(call.address)}
