@@ -13,7 +13,7 @@ export default function Calls() {
   const [count, setCount] = useState(0);
   const loadingRef = useRef(false);
 
-  // ✅ Load function with API field mapping
+  // ✅ Load calls
   async function load(showToast = false) {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -60,7 +60,7 @@ export default function Calls() {
     }
   }
 
-  // ✅ Authentication check
+  // ✅ Authentication
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me");
@@ -72,12 +72,12 @@ export default function Calls() {
     })();
   }, []);
 
-  // ✅ Reload when tab/page changes
+  // ✅ Refresh on tab/page change
   useEffect(() => {
     if (user) load(false);
   }, [tab, page]);
 
-  // ✅ Silent refresh every 30s
+  // ✅ Auto-refresh every 30s
   useEffect(() => {
     const t = setInterval(() => load(false), 30000);
     return () => clearInterval(t);
@@ -100,22 +100,44 @@ export default function Calls() {
     }
   }
 
-  // ✅ Function to start live navigation
+  // ✅ Smart Navigation Handler (App + Browser Fallback)
   function startNavigation(address) {
+    if (!address) {
+      toast.error("No address found!");
+      return;
+    }
+
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
           const origin = `${latitude},${longitude}`;
           const destination = encodeURIComponent(address);
 
-          // 🚀 Google Maps live navigation URL
-          const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving&dir_action=navigate`;
+          // Detect if user is on mobile
+          const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-          // Open Maps in new tab or app
-          window.open(mapsUrl, "_blank");
+          if (isMobile) {
+            // Try opening the Google Maps app
+            const appUrl = `comgooglemaps://?saddr=${origin}&daddr=${destination}&directionsmode=driving`;
+
+            // If app fails, fallback to browser after small delay
+            const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+
+            // Open the app first
+            window.location.href = appUrl;
+
+            // Fallback after 1 second if app isn't installed
+            setTimeout(() => {
+              window.open(fallbackUrl, "_blank");
+            }, 1000);
+          } else {
+            // Desktop fallback
+            const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+            window.open(mapsUrl, "_blank");
+          }
         },
-        (error) => {
+        (err) => {
           toast.error("Please enable location access to start route.");
           const destination = encodeURIComponent(address);
           const fallbackUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
@@ -201,7 +223,7 @@ export default function Calls() {
                   Call
                 </a>
 
-                {/* ✅ Live Route Start */}
+                {/* ✅ LIVE NAVIGATION FIXED */}
                 <button
                   className="btn bg-gray-100"
                   onClick={() => startNavigation(call.address)}
@@ -209,7 +231,6 @@ export default function Calls() {
                   Go
                 </button>
 
-                {/* ✅ Status Control */}
                 {tab === "All Calls" ? (
                   <select
                     className="input"
