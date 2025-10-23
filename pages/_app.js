@@ -1,6 +1,6 @@
+// pages/_app.js
 import '../styles/globals.css'
-import { useEffect, useState } from 'react'
-import toast, { Toaster } from 'react-hot-toast'
+import { Toaster } from 'react-hot-toast'
 import RequireLocation from '../components/RequireLocation'
 
 export default function MyApp({ Component, pageProps }){

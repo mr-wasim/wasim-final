@@ -5,22 +5,33 @@ export default function RequireLocation({ children }) {
   const [status, setStatus] = useState("pending"); // pending | allowed | denied
 
   useEffect(() => {
+    // Trigger geolocation request immediately on mobile
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
+      alert("Geolocation not supported by your browser");
       setStatus("denied");
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      () => setStatus("allowed"),
-      () => setStatus("denied")
+      (position) => {
+        console.log("User coords:", position.coords);
+        setStatus("allowed");
+      },
+      (error) => {
+        console.error("Location error:", error);
+        setStatus("denied");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 } // mobile-friendly options
     );
   }, []);
 
   if (status === "pending") {
+    // Waiting for permission
     return (
       <div className="flex items-center justify-center h-screen bg-gray-100">
-        <p className="text-lg font-semibold">Please allow location to continue...</p>
+        <p className="text-lg font-semibold">
+          Please allow location to continue...
+        </p>
       </div>
     );
   }
