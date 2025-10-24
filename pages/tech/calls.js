@@ -4,6 +4,8 @@ import { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
+import { db } from "../../lib/firebase";
+import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
 
@@ -74,7 +76,7 @@ export default function Calls() {
     }
   }
 
-  // Authentication
+  // Authentication + realtime listener start
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me");
@@ -83,6 +85,29 @@ export default function Calls() {
       if (u.role !== "technician") return (window.location.href = "/login");
       setUser(u);
       load(false);
+
+      // ✅ Firebase realtime listener (technician notifications)
+      const q = query(
+        collection(db, "notifications"),
+        where("to", "==", u.username || u.email || u._id),
+        orderBy("createdAt", "desc")
+      );
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            const data = change.doc.data();
+            toast.custom(
+              (t) => (
+                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+                  🔔 {data.message}
+                </div>
+              ),
+              { duration: 4000 }
+            );
+          }
+        });
+      });
+      return () => unsubscribe();
     })();
   }, []);
 
@@ -109,6 +134,19 @@ export default function Calls() {
       if (!r.ok) throw new Error(d.error || "Failed");
       toast.success("Status Updated");
       await load(false);
+
+      // ✅ Notify admin when technician closes a call
+      if (status === "Closed") {
+        await fetch("/api/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: "admin",
+            message: `${user.username || "Technician"} has closed a call.`,
+            type: "call_closed",
+          }),
+        });
+      }
     } catch (err) {
       toast.error(err.message);
     }
@@ -116,10 +154,7 @@ export default function Calls() {
 
   // Mobile Navigation
   function startNavigation(address) {
-    if (!address) {
-      toast.error("No address found!");
-      return;
-    }
+    if (!address) return toast.error("No address found!");
 
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -139,9 +174,7 @@ export default function Calls() {
         },
         () => toast.error("Please enable location to start navigation.")
       );
-    } else {
-      toast.error("Geolocation not supported on this device.");
-    }
+    } else toast.error("Geolocation not supported on this device.");
   }
 
   return (
@@ -166,11 +199,6 @@ export default function Calls() {
                 }`}
               >
                 {t}
-                {t === "Today Calls" && (
-                  <span className="ml-1 badge bg-red-100 text-red-600">
-                    NEW
-                  </span>
-                )}
               </button>
             ))}
           </div>
@@ -255,10 +283,7 @@ export default function Calls() {
 
                 {/* Buttons */}
                 <div className="flex gap-2 mt-3">
-                  <a
-                    className="btn bg-green-600 text-white"
-                    href={`tel:${call.phone}`}
-                  >
+                  <a className="btn bg-green-600 text-white" href={`tel:${call.phone}`}>
                     Call
                   </a>
                   <button
@@ -271,9 +296,7 @@ export default function Calls() {
                     <select
                       className="input"
                       value={call.status}
-                      onChange={(e) =>
-                        updateStatus(call._id, e.target.value)
-                      }
+                      onChange={(e) => updateStatus(call._id, e.target.value)}
                     >
                       <option>Pending</option>
                       <option>Closed</option>
@@ -290,27 +313,6 @@ export default function Calls() {
               </motion.div>
             );
           })}
-
-          {/* Pagination */}
-          <div className="flex justify-between mt-3 items-center">
-            <button
-              disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
-              className="btn bg-gray-100"
-            >
-              Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page {page} • Showing {items.length} of {count}
-            </div>
-            <button
-              disabled={items.length < 4}
-              onClick={() => setPage((p) => p + 1)}
-              className="btn bg-gray-100"
-            >
-              Next
-            </button>
-          </div>
         </div>
       </main>
 
