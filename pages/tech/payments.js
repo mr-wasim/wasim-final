@@ -9,8 +9,8 @@ export default function Payments(){
   const [form,setForm]=useState({ 
     receiver:'', 
     mode:'', 
-    onlineAmount:0, 
-    cashAmount:0, 
+    onlineAmount: '', 
+    cashAmount:'', 
     receiverSignature:'' 
   });
   const sigRef = useRef();
