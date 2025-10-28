@@ -89,6 +89,7 @@ export default function TechHome(){
                   }} 
                 />
               </div>
+              <div></div>
               <div className="text-xs text-gray-500 mt-1">
                 Sign inside box. 
                 <button type="button" onClick={clearSig} className="underline ml-2">Clear</button>
@@ -101,5 +102,6 @@ export default function TechHome(){
       </main>
       <BottomNav />
     </div>
+   
   );
 }
