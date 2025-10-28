@@ -5,12 +5,13 @@ import { getToken, onMessage, getMessaging } from "firebase/messaging";
 import { initializeApp, getApps, getApp } from "firebase/app";
 
 const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
-  projectId: "YOUR_FIREBASE_PROJECT_ID",
-  storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_FIREBASE_SENDER_ID",
-  appId: "YOUR_FIREBASE_APP_ID",
+  apiKey: "AIzaSyCf6VNLkMzTOV51FFqWHrxB-KBr5Vu_xtM",
+  authDomain: "chimney-solutions-nt.firebaseapp.com",
+  projectId: "chimney-solutions-nt",
+  storageBucket: "chimney-solutions-nt.appspot.com", // ✅ FIXED
+  messagingSenderId: "391952557503",
+  appId: "1:391952557503:web:b2fefa69b6005c45dcad0a",
+  measurementId: "G-2361S394R0",
 };
 
 export default function MyApp({ Component, pageProps }) {
