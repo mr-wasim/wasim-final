@@ -1,8 +1,6 @@
 // utils/firebase.js
-import { initializeApp, getApps } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import { getMessaging, isSupported } from "firebase/messaging";
-import { getAnalytics, isSupported as analyticsSupported } from "firebase/analytics";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getMessaging } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -14,33 +12,17 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+// ✅ agar app pehle se initialize hai to wahi use karo
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// ✅ Properly get Firestore instance
-const db = getFirestore(app);
-
-// ✅ Optional: Safe messaging
-let messaging = null;
-if (typeof window !== "undefined") {
-  isSupported()
-    .then((ok) => {
-      if (ok) {
-        messaging = getMessaging(app);
-      } else {
-        console.warn("⚠️ Firebase messaging not supported");
-      }
-    })
-    .catch(console.error);
+// optional: agar tum FCM use kar rahe ho
+let messaging;
+if (typeof window !== "undefined" && "Notification" in window) {
+  try {
+    messaging = getMessaging(app);
+  } catch (e) {
+    console.warn("Messaging not supported or error initializing:", e);
+  }
 }
 
-// ✅ Optional: Safe analytics
-let analytics = null;
-if (typeof window !== "undefined") {
-  analyticsSupported()
-    .then((ok) => {
-      if (ok) analytics = getAnalytics(app);
-    })
-    .catch(console.error);
-}
-
-export { app, db, messaging, analytics };
+export { app, messaging };

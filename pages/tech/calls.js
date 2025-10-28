@@ -6,6 +6,8 @@ import { motion } from "framer-motion";
 import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
 import { db } from "../../lib/firebase";
 import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
+import { app, messaging } from "../../utils/firebase";
+
 
 // ✅ Firebase Messaging imports
 import { initializeApp } from "firebase/app";
@@ -34,8 +36,7 @@ export default function Calls() {
   // ✅ Initialize Firebase Messaging
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const app = initializeApp(firebaseConfig);
-      const messaging = getMessaging(app);
+      
 
       // Request permission for notification
       Notification.requestPermission().then((permission) => {
