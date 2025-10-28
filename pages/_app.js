@@ -18,6 +18,8 @@ export default function MyApp({ Component, pageProps }) {
   const [token, setToken] = useState(null);
 
   useEffect(() => {
+
+    
     // ✅ Run only in browser
     if (typeof window === "undefined") return;
 
@@ -47,6 +49,17 @@ export default function MyApp({ Component, pageProps }) {
           vapidKey:
             "BNQGS7VCHzRbEZi5xMvzVFIlsGr6aFtkEtEbaK43x39Y8vLT-wexc738Y-AlycYmKBasGrxTcP6udOSymXUHZKg",
         });
+        if ("serviceWorker" in navigator) {
+  navigator.serviceWorker
+    .register("/firebase-messaging-sw.js")
+    .then((registration) => {
+      console.log("✅ Service Worker registered:", registration);
+    })
+    .catch((error) => {
+      console.error("❌ Service Worker registration failed:", error);
+    });
+}
+
 
         if (currentToken) {
           console.log("📱 FCM Token:", currentToken);
