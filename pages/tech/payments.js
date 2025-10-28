@@ -1,10 +1,11 @@
+"use client";
+export const dynamic = "force-dynamic"; // ✅ prevent Next.js static build errors
+
 import Header from "../../components/Header";
 import BottomNav from "../../components/BottomNav";
 import SignaturePad from "react-signature-canvas";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { getToken, onMessage } from "firebase/messaging";
-import { messaging } from "../../utils/firebase"; // ✅ firebase.js में initialized messaging import करें
 
 export default function Payments() {
   const [user, setUser] = useState(null);
@@ -22,10 +23,8 @@ export default function Payments() {
   // ✅ Responsive SignaturePad width
   useEffect(() => {
     function updateSize() {
-      if (window.innerWidth < 640) {
-        setCanvasWidth(window.innerWidth - 40);
-      } else {
-        setCanvasWidth(500);
+      if (typeof window !== "undefined") {
+        setCanvasWidth(window.innerWidth < 640 ? window.innerWidth - 40 : 500);
       }
     }
     updateSize();
@@ -33,61 +32,72 @@ export default function Payments() {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
-  // ✅ Get user
+  // ✅ Get logged-in user
   useEffect(() => {
     (async () => {
-      const me = await fetch("/api/auth/me");
-      if (!me.ok) {
-        window.location.href = "/login";
-        return;
+      try {
+        const me = await fetch("/api/auth/me");
+        if (!me.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const u = await me.json();
+        if (u.role !== "technician") {
+          window.location.href = "/login";
+          return;
+        }
+        setUser(u);
+      } catch (err) {
+        console.error("User fetch error:", err);
       }
-      const u = await me.json();
-      if (u.role !== "technician") {
-        window.location.href = "/login";
-        return;
-      }
-      setUser(u);
     })();
   }, []);
 
-  // ✅ Firebase Push Notification setup
+  // ✅ Firebase Push Notification setup (lazy-load only on client)
   useEffect(() => {
-    const requestPermission = async () => {
-      const permission = await Notification.requestPermission();
-      if (permission === "granted") {
-        try {
-          const token = await getToken(messaging, {
-            vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-          });
-          if (token) {
-            console.log("✅ FCM Token:", token);
-            setDeviceToken(token);
-            await fetch("/api/save-fcm-token", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ token }),
+    if (typeof window === "undefined") return; // ✅ skip on server
+
+    (async () => {
+      try {
+        const { getToken, onMessage } = await import("firebase/messaging");
+        const { messaging } = await import("../../utils/firebase");
+
+        const permission = await Notification.requestPermission();
+        if (permission === "granted") {
+          try {
+            const token = await getToken(messaging, {
+              vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
             });
+            if (token) {
+              console.log("✅ FCM Token:", token);
+              setDeviceToken(token);
+              await fetch("/api/save-fcm-token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token }),
+              });
+            }
+          } catch (err) {
+            console.error("FCM Token Error:", err);
           }
-        } catch (err) {
-          console.error("FCM Token Error:", err);
+        } else {
+          console.warn("❌ Notification permission denied");
         }
-      } else {
-        console.warn("❌ Notification permission denied");
+
+        // Foreground message listener
+        onMessage(messaging, (payload) => {
+          console.log("📩 Foreground message:", payload);
+          toast.custom(
+            <div className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg">
+              📢 {payload.notification?.title || "New Notification"} <br />
+              {payload.notification?.body}
+            </div>
+          );
+        });
+      } catch (err) {
+        console.error("Firebase Messaging Error:", err);
       }
-    };
-
-    requestPermission();
-
-    // ✅ Foreground message listener
-    onMessage(messaging, (payload) => {
-      console.log("📩 Foreground message:", payload);
-      toast.custom(
-        <div className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg">
-          📢 {payload.notification?.title || "New Notification"} <br />
-          {payload.notification?.body}
-        </div>
-      );
-    });
+    })();
   }, []);
 
   // ✅ Clear signature
@@ -100,6 +110,7 @@ export default function Payments() {
   async function submit(e) {
     e.preventDefault();
     const receiverSignature = form.receiverSignature || sigRef.current?.toDataURL();
+
     if (!receiverSignature) {
       toast.error("Receiver signature required");
       return;
@@ -109,38 +120,43 @@ export default function Payments() {
       return;
     }
 
-    const r = await fetch("/api/tech/payment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, receiverSignature }),
-    });
+    try {
+      const r = await fetch("/api/tech/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, receiverSignature }),
+      });
 
-    const d = await r.json();
-    if (!r.ok) {
-      toast.error(d.error || "Failed");
-      return;
+      const d = await r.json();
+      if (!r.ok) {
+        toast.error(d.error || "Failed");
+        return;
+      }
+
+      toast.success("Payment recorded ✅");
+
+      // ✅ Send notification to Admin
+      await fetch("/api/send-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "New Payment Recorded",
+          body: `${form.receiver} paid via ${form.mode}`,
+        }),
+      });
+
+      setForm({
+        receiver: "",
+        mode: "",
+        onlineAmount: 0,
+        cashAmount: 0,
+        receiverSignature: "",
+      });
+      clearSig();
+    } catch (err) {
+      console.error("Payment submission failed:", err);
+      toast.error("Error recording payment");
     }
-
-    toast.success("Payment recorded ✅");
-
-    // ✅ Send mobile push notification to Admin
-    await fetch("/api/send-notification", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "New Payment Recorded",
-        body: `${form.receiver} paid via ${form.mode}`,
-      }),
-    });
-
-    setForm({
-      receiver: "",
-      mode: "",
-      onlineAmount: 0,
-      cashAmount: 0,
-      receiverSignature: "",
-    });
-    clearSig();
   }
 
   return (
