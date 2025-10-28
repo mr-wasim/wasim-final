@@ -7,7 +7,21 @@ import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
 import { db } from "../../lib/firebase";
 import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 
+// ✅ Firebase Messaging imports
+import { initializeApp } from "firebase/app";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
+
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
+
+// ✅ Firebase Config (same as your project)
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
 
 export default function Calls() {
   const [user, setUser] = useState(null);
@@ -16,6 +30,48 @@ export default function Calls() {
   const [page, setPage] = useState(1);
   const [count, setCount] = useState(0);
   const loadingRef = useRef(false);
+
+  // ✅ Initialize Firebase Messaging
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const app = initializeApp(firebaseConfig);
+      const messaging = getMessaging(app);
+
+      // Request permission for notification
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          getToken(messaging, {
+            vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+          })
+            .then((token) => {
+              if (token && user?._id) {
+                // ✅ Save technician's FCM token
+                fetch("/api/save-token", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ userId: user._id, token }),
+                });
+              }
+            })
+            .catch((err) => console.error("Token error:", err));
+        }
+      });
+
+      // ✅ Handle notification when app is open
+      onMessage(messaging, (payload) => {
+        console.log("Push Message:", payload);
+        toast.custom(
+          <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+            🔔 {payload.notification?.title || "New Notification"}
+            <div className="text-sm text-gray-100">
+              {payload.notification?.body}
+            </div>
+          </div>,
+          { duration: 5000 }
+        );
+      });
+    }
+  }, [user]);
 
   // Format "time ago"
   function timeAgo(dateStr) {
@@ -86,7 +142,7 @@ export default function Calls() {
       setUser(u);
       load(false);
 
-      // ✅ Firebase realtime listener (technician notifications)
+      // ✅ Firebase Firestore realtime listener (for in-app toast)
       const q = query(
         collection(db, "notifications"),
         where("to", "==", u.username || u.email || u._id),
@@ -97,11 +153,9 @@ export default function Calls() {
           if (change.type === "added") {
             const data = change.doc.data();
             toast.custom(
-              (t) => (
-                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
-                  🔔 {data.message}
-                </div>
-              ),
+              <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+                🔔 {data.message}
+              </div>,
               { duration: 4000 }
             );
           }
@@ -142,8 +196,8 @@ export default function Calls() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             to: "admin",
-            message: `${user.username || "Technician"} has closed a call.`,
-            type: "call_closed",
+            title: "Call Closed ✅",
+            body: `${user.username || "Technician"} has closed a call.`,
           }),
         });
       }
@@ -155,7 +209,6 @@ export default function Calls() {
   // Mobile Navigation
   function startNavigation(address) {
     if (!address) return toast.error("No address found!");
-
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -163,7 +216,6 @@ export default function Calls() {
           const origin = `${latitude},${longitude}`;
           const destination = encodeURIComponent(address);
           const ua = navigator.userAgent || "";
-
           if (/Android/i.test(ua)) {
             window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
           } else if (/iPhone|iPad|iPod/i.test(ua)) {
