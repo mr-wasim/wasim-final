@@ -1,6 +1,5 @@
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
-import { sendNotification } from "../../../lib/sendNotification.js"; // ✅ Notification import
 
 async function handler(req, res, user) {
   if (req.method !== "POST") return res.status(405).end();
@@ -15,9 +14,11 @@ async function handler(req, res, user) {
   const techId = ObjectId.isValid(user.id) ? new ObjectId(user.id) : user.id;
 
   try {
+    // 👇 Normalize today's date only (ignore hours)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // 🔍 Check if technician already submitted same payment today
     const existingPayment = await db.collection("payments").findOne({
       techId,
       receiver,
@@ -34,6 +35,7 @@ async function handler(req, res, user) {
       });
     }
 
+    // ✅ Save only if no duplicate found
     await db.collection("payments").insertOne({
       techId,
       techUsername: user.username,
@@ -45,20 +47,10 @@ async function handler(req, res, user) {
       createdAt: new Date(),
     });
 
-    // ✅ Send Notification to Admins
-    const admins = await db.collection("admins").find({ fcmToken: { $exists: true } }).toArray();
-    for (const admin of admins) {
-      await sendNotification(
-        admin.fcmToken,
-        "Payment Received 💸",
-        `${user.username} has submitted a payment successfully.`
-      );
-    }
-
     return res.status(200).json({ ok: true, message: "Payment recorded successfully." });
   } catch (error) {
     console.error("Payment error:", error);
-    return res.status(500).json({ ok: false, message: "Payment already submitted" });
+    return res.status(500).json({ ok: false, message: "Payment All ready submited" });
   }
 }
 
