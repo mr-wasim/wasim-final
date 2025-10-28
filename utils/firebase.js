@@ -1,29 +1,36 @@
-// utils/firebase.js
+// /lib/firebase.js
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getMessaging } from "firebase/messaging";
+import { getFirestore } from "firebase/firestore";
+import { getMessaging, isSupported } from "firebase/messaging";
 
+// ✅ Firebase Config
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: "AIzaSyCf6VNLkMzTOV51FFqWHrxB-KBr5Vu_xtM",
+  authDomain: "chimney-solutions-nt.firebaseapp.com",
+  projectId: "chimney-solutions-nt",
+  storageBucket: "chimney-solutions-nt.firebasestorage.app",
+  messagingSenderId: "391952557503",
+  appId: "1:391952557503:web:b2fefa69b6005c45dcad0a",
+  measurementId: "G-2361S394R0",
 };
 
-// ✅ agar app pehle se initialize hai to wahi use karo
+// ✅ Prevent duplicate initialization
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
 
 
 
-// optional: agar tum FCM use kar rahe ho
-let messaging;
-if (typeof window !== "undefined" && "Notification" in window) {
-  try {
-    messaging = getMessaging(app);
-  } catch (e) {
-    console.warn("Messaging not supported or error initializing:", e);
-  }
+// ✅ Messaging instance (only if supported)
+let messaging = null;
+if (typeof window !== "undefined") {
+  isSupported().then((supported) => {
+    if (supported) {
+      messaging = getMessaging(app);
+      console.log("✅ Firebase Messaging initialized");
+    } else {
+      console.warn("🚫 Firebase Messaging not supported in this browser");
+    }
+  });
 }
 
-export { app, messaging };
+export { app, db, messaging };
