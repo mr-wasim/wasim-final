@@ -1,36 +1,25 @@
-// /lib/firebase.js
+// utils/firebase.js
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getMessaging, isSupported } from "firebase/messaging";
 
-// ✅ Firebase Config
+// ✅ Firebase config (Environment variables se lo)
 const firebaseConfig = {
-  apiKey: "AIzaSyCf6VNLkMzTOV51FFqWHrxB-KBr5Vu_xtM",
-  authDomain: "chimney-solutions-nt.firebaseapp.com",
-  projectId: "chimney-solutions-nt",
-  storageBucket: "chimney-solutions-nt.appspot.com",
-  messagingSenderId: "391952557503",
-  appId: "1:391952557503:web:b2fefa69b6005c45dcad0a",
-  measurementId: "G-2361S394R0",
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
 // ✅ Prevent duplicate initialization
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-const db = getFirestore(app);
 
+// ✅ Firestore initialize
+export const db = getFirestore(app);
 
+// ✅ Messaging initialize (only if supported)
+export const messaging = (await isSupported()) ? getMessaging(app) : null;
 
-// ✅ Messaging instance (only if supported)
-let messaging = null;
-if (typeof window !== "undefined") {
-  isSupported().then((supported) => {
-    if (supported) {
-      messaging = getMessaging(app);
-      console.log("✅ Firebase Messaging initialized");
-    } else {
-      console.warn("🚫 Firebase Messaging not supported in this browser");
-    }
-  });
-}
-
-export { app, db, messaging };
+export default app;

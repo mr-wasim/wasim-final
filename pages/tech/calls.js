@@ -1,29 +1,21 @@
+"use client";
 import Header from "../../components/Header";
 import BottomNav from "../../components/BottomNav";
 import { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
-import { db } from "../../lib/firebase";
-import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
-import { app, messaging } from "../../utils/firebase";
-
-
-// ✅ Firebase Messaging imports
-import { initializeApp } from "firebase/app";
-import { getMessaging, getToken, onMessage } from "firebase/messaging";
+import { db, messaging } from "../../utils/firebase"; // ✅ single correct import
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  orderBy,
+} from "firebase/firestore";
+import { getToken, onMessage } from "firebase/messaging";
 
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
-
-// ✅ Firebase Config (same as your project)
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
 
 export default function Calls() {
   const [user, setUser] = useState(null);
@@ -33,45 +25,41 @@ export default function Calls() {
   const [count, setCount] = useState(0);
   const loadingRef = useRef(false);
 
-  // ✅ Initialize Firebase Messaging
+  // ✅ Firebase Messaging setup
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      
+    if (typeof window === "undefined" || !messaging) return;
 
-      // Request permission for notification
-      Notification.requestPermission().then((permission) => {
-        if (permission === "granted") {
-          getToken(messaging, {
-            vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+    Notification.requestPermission().then((permission) => {
+      if (permission === "granted") {
+        getToken(messaging, {
+          vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+        })
+          .then((token) => {
+            if (token && user?._id) {
+              fetch("/api/save-token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId: user._id, token }),
+              });
+            }
           })
-            .then((token) => {
-              if (token && user?._id) {
-                // ✅ Save technician's FCM token
-                fetch("/api/save-token", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ userId: user._id, token }),
-                });
-              }
-            })
-            .catch((err) => console.error("Token error:", err));
-        }
-      });
+          .catch((err) => console.error("Token error:", err));
+      }
+    });
 
-      // ✅ Handle notification when app is open
-      onMessage(messaging, (payload) => {
-        console.log("Push Message:", payload);
-        toast.custom(
-          <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
-            🔔 {payload.notification?.title || "New Notification"}
-            <div className="text-sm text-gray-100">
-              {payload.notification?.body}
-            </div>
-          </div>,
-          { duration: 5000 }
-        );
-      });
-    }
+    // ✅ Foreground notifications
+    onMessage(messaging, (payload) => {
+      console.log("Push Message:", payload);
+      toast.custom(
+        <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+          🔔 {payload.notification?.title || "New Notification"}
+          <div className="text-sm text-gray-100">
+            {payload.notification?.body}
+          </div>
+        </div>,
+        { duration: 5000 }
+      );
+    });
   }, [user]);
 
   // Format "time ago"
@@ -133,7 +121,7 @@ export default function Calls() {
     }
   }
 
-  // Authentication + realtime listener start
+  // Auth + realtime notifications
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me");
@@ -141,37 +129,40 @@ export default function Calls() {
       const u = await me.json();
       if (u.role !== "technician") return (window.location.href = "/login");
       setUser(u);
-      load(false);
+      await load(false);
 
-      // ✅ Firebase Firestore realtime listener (for in-app toast)
-      const q = query(
-        collection(db, "notifications"),
-        where("to", "==", u.username || u.email || u._id),
-        orderBy("createdAt", "desc")
-      );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === "added") {
-            const data = change.doc.data();
-            toast.custom(
-              <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
-                🔔 {data.message}
-              </div>,
-              { duration: 4000 }
-            );
-          }
+      // ✅ Firestore realtime listener (safe check)
+      if (db) {
+        const q = query(
+          collection(db, "notifications"),
+          where("to", "==", u.username || u.email || u._id),
+          orderBy("createdAt", "desc")
+        );
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added") {
+              const data = change.doc.data();
+              toast.custom(
+                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+                  🔔 {data.message}
+                </div>,
+                { duration: 4000 }
+              );
+            }
+          });
         });
-      });
-      return () => unsubscribe();
+        return () => unsubscribe();
+      } else {
+        console.warn("⚠️ Firestore DB not initialized yet.");
+      }
     })();
   }, []);
 
-  // Refresh on tab/page change
+  // Refresh handlers
   useEffect(() => {
     if (user) load(false);
   }, [tab, page]);
 
-  // Auto-refresh every 30s
   useEffect(() => {
     const t = setInterval(() => load(false), 30000);
     return () => clearInterval(t);
@@ -190,7 +181,6 @@ export default function Calls() {
       toast.success("Status Updated");
       await load(false);
 
-      // ✅ Notify admin when technician closes a call
       if (status === "Closed") {
         await fetch("/api/notify", {
           method: "POST",
@@ -207,7 +197,7 @@ export default function Calls() {
     }
   }
 
-  // Mobile Navigation
+  // Start navigation
   function startNavigation(address) {
     if (!address) return toast.error("No address found!");
     if (navigator.geolocation) {

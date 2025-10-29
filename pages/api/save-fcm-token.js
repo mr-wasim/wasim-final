@@ -1,29 +1,38 @@
-import { getMessaging, getToken, onMessage } from "firebase/messaging";
-import { initializeApp } from "firebase/app";
+// ✅ /pages/api/save-fcm-token.js
+import clientPromise from "../../lib/mongodb.js";
 
-const firebaseConfig = {
-  apiKey: "...",
-  authDomain: "...",
-  projectId: "...",
-  messagingSenderId: "...",
-  appId: "...",
-};
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, message: "Method not allowed" });
+  }
 
-const app = initializeApp(firebaseConfig);
-const messaging = getMessaging(app);
-
-export async function requestFCMToken(userId) {
   try {
-    const token = await getToken(messaging, {
-      vapidKey: process.env.NEXT_PUBLIC_VAPID_KEY,
-    });
+    const { token, userId, role = "technician" } = req.body || {};
 
-    await fetch("/api/save-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, token }),
-    });
-  } catch (err) {
-    console.error("FCM Token Error:", err);
+    // ✅ Validate token
+    if (!token) {
+      return res.status(400).json({ ok: false, message: "FCM token is required" });
+    }
+
+    // ✅ Connect to DB
+    const client = await clientPromise;
+    const db = client.db();
+
+    // ✅ Ensure collection exists
+    const collection = db.collection("fcm_tokens");
+
+    // ✅ Upsert (update if already exists)
+    await collection.updateOne(
+      { userId: userId || null, role },
+      { $set: { token, updatedAt: new Date() } },
+      { upsert: true }
+    );
+
+    console.log("✅ FCM Token saved to DB:", token);
+
+    return res.status(200).json({ ok: true, message: "FCM token saved successfully." });
+  } catch (error) {
+    console.error("❌ FCM Token Save Error:", error);
+    return res.status(500).json({ ok: false, message: "Server error while saving FCM token." });
   }
 }

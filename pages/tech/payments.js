@@ -1,5 +1,5 @@
 "use client";
-export const dynamic = "force-dynamic"; // ✅ prevent Next.js static build errors
+export const dynamic = "force-dynamic";
 
 import Header from "../../components/Header";
 import BottomNav from "../../components/BottomNav";
@@ -53,49 +53,64 @@ export default function Payments() {
     })();
   }, []);
 
-  // ✅ Firebase Push Notification setup (lazy-load only on client)
+  // ✅ Firebase Push Notification Setup
   useEffect(() => {
-    if (typeof window === "undefined") return; // ✅ skip on server
+    if (typeof window === "undefined") return;
 
     (async () => {
       try {
-        const { getToken, onMessage } = await import("firebase/messaging");
-        const { messaging } = await import("../../utils/firebase");
+        const { getMessaging, getToken, onMessage } = await import("firebase/messaging");
+        const { initializeApp, getApps, getApp } = await import("firebase/app");
+
+        const firebaseConfig = {
+          apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+          authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+          storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+          messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+          appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+        };
+
+        const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+        const messaging = getMessaging(app);
 
         const permission = await Notification.requestPermission();
-        if (permission === "granted") {
-          try {
-            const token = await getToken(messaging, {
-              vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-            });
-            if (token) {
-              console.log("✅ FCM Token:", token);
-              setDeviceToken(token);
-              await fetch("/api/save-fcm-token", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token }),
-              });
-            }
-          } catch (err) {
-            console.error("FCM Token Error:", err);
-          }
-        } else {
-          console.warn("❌ Notification permission denied");
+        if (permission !== "granted") {
+          console.warn("🔒 Notification permission denied");
+          return;
         }
 
-        // Foreground message listener
+        const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+        if (!vapidKey) throw new Error("Missing NEXT_PUBLIC_FIREBASE_VAPID_KEY");
+
+        // ✅ Get FCM token
+        const token = await getToken(messaging, { vapidKey });
+        if (token) {
+          console.log("✅ FCM Token:", token);
+          setDeviceToken(token);
+
+          // ✅ Save FCM token for admin use
+          await fetch("/api/save-fcm-token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+          });
+        } else {
+          console.warn("⚠️ No FCM registration token available.");
+        }
+
+        // ✅ Foreground message listener
         onMessage(messaging, (payload) => {
           console.log("📩 Foreground message:", payload);
           toast.custom(
             <div className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg">
-              📢 {payload.notification?.title || "New Notification"} <br />
-              {payload.notification?.body}
+              📢 {payload?.notification?.title || "New Notification"} <br />
+              {payload?.notification?.body || ""}
             </div>
           );
         });
       } catch (err) {
-        console.error("Firebase Messaging Error:", err);
+        console.error("🔥 Firebase Messaging Init Error:", err);
       }
     })();
   }, []);
@@ -109,6 +124,7 @@ export default function Payments() {
   // ✅ Submit form
   async function submit(e) {
     e.preventDefault();
+
     const receiverSignature = form.receiverSignature || sigRef.current?.toDataURL();
 
     if (!receiverSignature) {
@@ -119,8 +135,13 @@ export default function Payments() {
       toast.error("Please enter paying name");
       return;
     }
+    if (!form.mode) {
+      toast.error("Please select payment mode");
+      return;
+    }
 
     try {
+      // ✅ Save payment record
       const r = await fetch("/api/tech/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -129,27 +150,36 @@ export default function Payments() {
 
       const d = await r.json();
       if (!r.ok) {
-        toast.error(d.error || "Failed");
+        toast.error(d.message || "Failed to record payment");
         return;
       }
 
-      toast.success("Payment recorded ✅");
+      toast.success("✅ Payment recorded successfully");
 
-      // ✅ Send notification to Admin
-      await fetch("/api/send-notification", {
+      // ✅ Send notification to admin (if token exists)
+      const notifyRes = await fetch("/api/sendNotification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: "New Payment Recorded",
+          token: deviceToken, // ✅ ensure token is passed!
+          title: "New Payment Recorded 💰",
           body: `${form.receiver} paid via ${form.mode}`,
         }),
       });
 
+      const notifyData = await notifyRes.json();
+      if (!notifyRes.ok) {
+        console.warn("⚠️ Notification failed:", notifyData);
+      } else {
+        console.log("✅ Notification sent:", notifyData);
+      }
+
+      // ✅ Reset form
       setForm({
         receiver: "",
         mode: "",
-        onlineAmount: 0,
-        cashAmount: 0,
+        onlineAmount: "",
+        cashAmount: "",
         receiverSignature: "",
       });
       clearSig();
@@ -265,18 +295,16 @@ export default function Payments() {
               </div>
               <div className="text-xs text-gray-500 mt-1">
                 Signature required.{" "}
-                <button
-                  type="button"
-                  onClick={clearSig}
-                  className="underline"
-                >
+                <button type="button" onClick={clearSig} className="underline">
                   Clear
                 </button>
               </div>
             </div>
 
             {/* Submit */}
-            <button className="btn bg-blue-600 text-white w-full">Submit</button>
+            <button className="btn bg-blue-600 text-white w-full">
+              Submit
+            </button>
           </form>
         </div>
       </main>

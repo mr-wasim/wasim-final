@@ -13,18 +13,14 @@ firebase.initializeApp({
   measurementId: "G-2361S394R0"
 });
 
-// ✅ Initialize messaging
 const messaging = firebase.messaging();
 
-// ✅ Handle background messages
 messaging.onBackgroundMessage(function (payload) {
-  console.log("📩 Background Message received:", payload);
-
-  const notificationTitle = payload.notification?.title || "🔔 New Alert";
+  console.log("📩 Received background message: ", payload);
+  const notificationTitle = payload.notification.title;
   const notificationOptions = {
-    body: payload.notification?.body || "You have a new message",
-    icon: "/logo.png",
+    body: payload.notification.body,
+    icon: "/firebase-logo.png",
   };
-
   self.registration.showNotification(notificationTitle, notificationOptions);
 });
