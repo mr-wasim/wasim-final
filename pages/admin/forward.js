@@ -31,8 +31,8 @@ export default function Forward() {
 
   async function submit(e) {
     e.preventDefault();
-    const r = await fetch("/api/admin/forward-call", {
-      method: "POST", 
+    const r = await fetch("/api/admin/forward", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form), // ✅ अब price और type भी backend को भेजे जाएंगे
     });
