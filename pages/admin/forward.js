@@ -14,62 +14,42 @@ export default function Forward() {
     type: "",
   });
 
-  // ✅ dynamic base URL (local & deployed दोनों में काम करेगा)
-  const baseUrl =
-    typeof window !== "undefined"
-      ? window.location.origin
-      : process.env.NEXT_PUBLIC_BASE_URL || "https://wasim-final.vercel.app";
-
   useEffect(() => {
     (async () => {
-      try {
-        const meRes = await fetch(`${baseUrl}/api/auth/me`);
-        const u = await meRes.json();
-        if (!meRes.ok || u.role !== "admin") {
-          window.location.href = "/login";
-          return;
-        }
-        setUser(u);
-
-        const r = await fetch(`${baseUrl}/api/admin/techs`);
-        const d = await r.json();
-        setTechs(d.items || []);
-      } catch (err) {
-        console.error("⚠️ Error loading data:", err);
-        toast.error("Failed to load technicians");
+      const me = await fetch("/api/auth/me");
+      const u = await me.json();
+      if (u.role !== "admin") {
+        window.location.href = "/login";
+        return;
       }
+      setUser(u);
+      const r = await fetch("/api/admin/techs");
+      const d = await r.json();
+      setTechs(d.items);
     })();
-  }, [baseUrl]);
+  }, []);
 
   async function submit(e) {
     e.preventDefault();
-    try {
-      const r = await fetch(`${baseUrl}/api/admin/forward`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-
-      const d = await r.json().catch(() => ({}));
-
-      if (!r.ok) {
-        toast.error(d.error || "Failed to forward");
-        return;
-      }
-
-      toast.success("Call forwarded successfully!");
-      setForm({
-        clientName: "",
-        phone: "",
-        address: "",
-        techId: "",
-        price: "",
-        type: "",
-      });
-    } catch (err) {
-      console.error("❌ Submit error:", err);
-      toast.error("Network error: check your internet or API URL");
+    const r = await fetch("/api/admin/forward", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form), // ✅ अब price और type भी backend को भेजे जाएंगे
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      toast.error(d.error || "Failed");
+      return;
     }
+    toast.success("Call forwarded");
+    setForm({
+      clientName: "",
+      phone: "",
+      address: "",
+      techId: "",
+      price: "",
+      type: "",
+    });
   }
 
   return (
@@ -100,6 +80,8 @@ export default function Forward() {
               onChange={(e) => setForm({ ...form, address: e.target.value })}
               required
             />
+
+            {/* ✅ नया फील्ड: Price */}
             <input
               className="input"
               placeholder="Price"
@@ -107,6 +89,8 @@ export default function Forward() {
               onChange={(e) => setForm({ ...form, price: e.target.value })}
               required
             />
+
+            {/* ✅ नया फील्ड: Type */}
             <input
               className="input"
               placeholder="Type"
@@ -114,6 +98,7 @@ export default function Forward() {
               onChange={(e) => setForm({ ...form, type: e.target.value })}
               required
             />
+
             <select
               className="input"
               value={form.techId}
@@ -127,6 +112,7 @@ export default function Forward() {
                 </option>
               ))}
             </select>
+
             <button className="btn bg-blue-600 text-white">Forward</button>
           </form>
         </div>

@@ -1,28 +1,18 @@
-// /pages/api/admin/forward.js
-
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
 async function handler(req, res, user) {
-  // ✅ Only allow POST requests
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).end();
 
   const { clientName, phone, address, techId, price, type } = req.body || {};
   const db = await getDb();
 
-  // 🔍 Check technician
-  const tech = await db
-    .collection("technicians")
-    .findOne({ _id: new ObjectId(techId) });
+  // 🔍 Technician fetch
+  const tech = await db.collection("technicians").findOne({ _id: new ObjectId(techId) });
+  if (!tech) return res.status(400).json({ error: "Technician not found" });
 
-  if (!tech) {
-    return res.status(400).json({ error: "Technician not found" });
-  }
-
-  // 💾 Save forwarded call
+  // 🗃️ Save forwarded call
   await db.collection("forwarded_calls").insertOne({
     clientName,
     phone,
@@ -35,32 +25,33 @@ async function handler(req, res, user) {
     createdAt: new Date(),
   });
 
-  // 🔔 Get FCM token for technician
+  // 🔔 Fetch FCM token
   const fcmTokenDoc = await db.collection("fcm_tokens").findOne({
     userId: techId,
     role: "technician",
   });
 
-  // ✅ Send notification if token exists
   if (fcmTokenDoc?.token) {
-    console.log("📲 Sending FCM notification to:", tech.username);
-
-    await sendNotification(
-      fcmTokenDoc.token,
-      "📞 New Call Assigned",
-      `Client: ${clientName} (${phone})\nTap to view details.`,
-      {
+    // ✅ Notification send (main step)
+    const payload = {
+      notification: {
+        title: "📞 New Call Assigned",
+        body: `Client: ${clientName} (${phone})\nTap to view details.`,
+        sound: "default", // sound enable
+      },
+      data: {
         techId: techId.toString(),
-        click_action: "FLUTTER_NOTIFICATION_CLICK",
-      }
-    );
+        click_action: "FLUTTER_NOTIFICATION_CLICK", // universal click support
+      },
+    };
 
-    console.log("✅ Notification sent successfully to technician:", tech.username);
+    await sendNotification(fcmTokenDoc.token, payload);
+    console.log("✅ Notification sent to technician:", tech.username);
   } else {
     console.log("⚠️ No FCM token found for technician:", techId);
   }
 
-  return res.json({ ok: true });
+  res.json({ ok: true });
 }
 
 export default requireRole("admin")(handler);
