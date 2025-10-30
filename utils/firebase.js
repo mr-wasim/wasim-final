@@ -1,25 +1,26 @@
-// utils/firebase.js
+// ✅ /utils/firebase.js
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import { getMessaging, isSupported } from "firebase/messaging";
+import { getMessaging } from "firebase/messaging";
 
-// ✅ Firebase config (Environment variables se lo)
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: "AIzaSyCf6VNLkMzTOV51FFqWHrxB-KBr5Vu_xtM",
+  authDomain: "chimney-solutions-nt.firebaseapp.com",
+  projectId: "chimney-solutions-nt",
+  storageBucket: "chimney-solutions-nt.appspot.com",
+  messagingSenderId: "391952557503",
+  appId: "1:391952557503:web:b2fefa69b6005c45dcad0a",
+  measurementId: "G-2361S394R0",
 };
 
-// ✅ Prevent duplicate initialization
+// ✅ Prevent re-initialization
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// ✅ Firestore initialize
-export const db = getFirestore(app);
+// ✅ Safe export
+let messaging;
+try {
+  messaging = getMessaging(app);
+} catch (err) {
+  console.warn("⚠️ Firebase Messaging not available in this context");
+}
 
-// ✅ Messaging initialize (only if supported)
-export const messaging = (await isSupported()) ? getMessaging(app) : null;
-
-export default app;
+export { app, messaging };

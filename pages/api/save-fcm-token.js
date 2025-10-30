@@ -1,7 +1,9 @@
-// ✅ /pages/api/save-fcm-token.js
+// /pages/api/save-fcm-token.js
 import clientPromise from "../../lib/mongodb.js";
 
 export default async function handler(req, res) {
+  console.log("📩 /api/save-fcm-token called with:", req.method);
+
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method not allowed" });
   }
@@ -9,30 +11,25 @@ export default async function handler(req, res) {
   try {
     const { token, userId, role = "technician" } = req.body || {};
 
-    // ✅ Validate token
-    if (!token) {
-      return res.status(400).json({ ok: false, message: "FCM token is required" });
+    if (!token || !userId) {
+      console.warn("⚠️ Missing token or userId", req.body);
+      return res.status(400).json({ ok: false, message: "Missing token or userId" });
     }
 
-    // ✅ Connect to DB
     const client = await clientPromise;
     const db = client.db();
-
-    // ✅ Ensure collection exists
     const collection = db.collection("fcm_tokens");
 
-    // ✅ Upsert (update if already exists)
-    await collection.updateOne(
-      { userId: userId || null, role },
+    const result = await collection.updateOne(
+      { userId, role },
       { $set: { token, updatedAt: new Date() } },
       { upsert: true }
     );
 
-    console.log("✅ FCM Token saved to DB:", token);
-
-    return res.status(200).json({ ok: true, message: "FCM token saved successfully." });
+    console.log("✅ FCM Token saved successfully:", { userId, token });
+    return res.status(200).json({ ok: true, message: "Token saved", result });
   } catch (error) {
-    console.error("❌ FCM Token Save Error:", error);
-    return res.status(500).json({ ok: false, message: "Server error while saving FCM token." });
+    console.error("❌ Error saving FCM token:", error);
+    return res.status(500).json({ ok: false, message: error.message });
   }
 }
