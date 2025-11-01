@@ -1,26 +1,18 @@
-// ✅ /utils/firebase.js
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getMessaging } from "firebase/messaging";
+// utils/firebaseAdmin.js
+import admin from "firebase-admin";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCf6VNLkMzTOV51FFqWHrxB-KBr5Vu_xtM",
-  authDomain: "chimney-solutions-nt.firebaseapp.com",
-  projectId: "chimney-solutions-nt",
-  storageBucket: "chimney-solutions-nt.appspot.com",
-  messagingSenderId: "391952557503",
-  appId: "1:391952557503:web:b2fefa69b6005c45dcad0a",
-  measurementId: "G-2361S394R0",
-};
-
-// ✅ Prevent re-initialization
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-
-// ✅ Safe export
-let messaging;
-try {
-  messaging = getMessaging(app);
-} catch (err) {
-  console.warn("⚠️ Firebase Messaging not available in this context");
+// ✅ Prevent duplicate admin initialization
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      project_id: process.env.FIREBASE_PROJECT_ID,
+      client_email: process.env.FIREBASE_CLIENT_EMAIL,
+      // Important: Replace escaped newlines
+      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    }),
+  });
 }
 
-export { app, messaging };
+// ✅ Exports for backend use
+export const adminDB = admin.firestore();
+export const adminAuth = admin.auth();
