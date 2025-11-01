@@ -4,8 +4,7 @@ import BottomNav from "../../components/BottomNav";
 import { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
-import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
-import { db, messaging } from "../../utils/firebase"; // ✅ single correct import
+import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi"; // ✅ single correct import
 import {
   collection,
   query,
