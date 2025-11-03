@@ -4,7 +4,7 @@ import BottomNav from "../../components/BottomNav";
 import { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
-import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi"; // ✅ single correct import
+import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
 import {
   collection,
   query,
@@ -13,6 +13,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { getToken, onMessage } from "firebase/messaging";
+import { db, messaging } from "../../lib/firebase"; // ✅ import added
 
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
 
@@ -26,39 +27,55 @@ export default function Calls() {
 
   // ✅ Firebase Messaging setup
   useEffect(() => {
-    if (typeof window === "undefined" || !messaging) return;
+    async function setupMessaging() {
+      // Wait until messaging initialized (for SSR)
+      const waitForMessaging = () =>
+        new Promise((resolve) => {
+          const check = () => {
+            if (window.firebaseMessaging) resolve(window.firebaseMessaging);
+            else setTimeout(check, 300);
+          };
+          check();
+        });
 
-    Notification.requestPermission().then((permission) => {
-      if (permission === "granted") {
-        getToken(messaging, {
-          vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-        })
-          .then((token) => {
-            if (token && user?._id) {
-              fetch("/api/save-token", {
+      const msg = await waitForMessaging();
+
+      Notification.requestPermission().then(async (permission) => {
+        if (permission === "granted" && user?._id) {
+          try {
+            const token = await getToken(msg, {
+              vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+            });
+            if (token) {
+              console.log("📱 Token:", token);
+              await fetch("/api/save-fcm-token", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ userId: user._id, token }),
               });
             }
-          })
-          .catch((err) => console.error("Token error:", err));
-      }
-    });
+          } catch (err) {
+            console.error("❌ Token error:", err);
+          }
+        }
+      });
 
-    // ✅ Foreground notifications
-    onMessage(messaging, (payload) => {
-      console.log("Push Message:", payload);
-      toast.custom(
-        <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
-          🔔 {payload.notification?.title || "New Notification"}
-          <div className="text-sm text-gray-100">
-            {payload.notification?.body}
-          </div>
-        </div>,
-        { duration: 5000 }
-      );
-    });
+      // Foreground notifications
+      onMessage(msg, (payload) => {
+        console.log("📩 New Message:", payload);
+        toast.custom(
+          <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+            🔔 {payload.notification?.title || "New Notification"}
+            <div className="text-sm text-gray-100">
+              {payload.notification?.body}
+            </div>
+          </div>,
+          { duration: 5000 }
+        );
+      });
+    }
+
+    if (typeof window !== "undefined") setupMessaging();
   }, [user]);
 
   // Format "time ago"
@@ -130,7 +147,6 @@ export default function Calls() {
       setUser(u);
       await load(false);
 
-      // ✅ Firestore realtime listener (safe check)
       if (db) {
         const q = query(
           collection(db, "notifications"),
@@ -152,7 +168,7 @@ export default function Calls() {
         });
         return () => unsubscribe();
       } else {
-        console.warn("⚠️ Firestore DB not initialized yet.");
+        console.warn("⚠️ Firestore not initialized.");
       }
     })();
   }, []);
@@ -222,7 +238,6 @@ export default function Calls() {
   return (
     <div className="pb-16">
       <Header user={user} />
-
       <main className="max-w-3xl mx-auto p-4 space-y-3">
         {/* Tabs */}
         <div className="card">
@@ -357,7 +372,6 @@ export default function Calls() {
           })}
         </div>
       </main>
-
       <BottomNav />
     </div>
   );
