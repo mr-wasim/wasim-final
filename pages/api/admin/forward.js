@@ -4,9 +4,9 @@ import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
 async function forwardHandler(req, res, user) {
-  // ✅ Always explicitly allow only POST — prevents 405 issues on Vercel
   if (req.method !== "POST") {
-    res.setHeader("Allow", ["POST"]); // <--- this line is key for Vercel
+    // ✅ Must set Allow header for Vercel — prevents 405 loops
+    res.setHeader("Allow", ["POST"]);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
 
@@ -34,7 +34,7 @@ async function forwardHandler(req, res, user) {
       createdAt: new Date(),
     });
 
-    // ✅ Fetch technician’s FCM token
+    // ✅ Send FCM Notification
     const fcmToken = await db
       .collection("fcm_tokens")
       .findOne({ userId: techId, role: "technician" });
@@ -58,15 +58,21 @@ async function forwardHandler(req, res, user) {
   }
 }
 
-// ✅ Final export (includes CORS + admin role protection)
 export default async function handler(req, res) {
-  // ✅ Allow preflight (CORS) requests
+  // ✅ Handle preflight OPTIONS request for CORS
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", ["POST", "OPTIONS"]);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.status(200).end();
   }
 
-  // ✅ Wrap with admin role validation
+  // ✅ Add CORS headers for all requests
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
   const wrapped = requireRole("admin")(forwardHandler);
   return wrapped(req, res);
 }
