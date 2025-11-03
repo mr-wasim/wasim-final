@@ -4,15 +4,20 @@ import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
 async function forwardHandler(req, res, user) {
-  try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method Not Allowed" });
-    }
+  // ✅ Always explicitly allow only POST — prevents 405 issues on Vercel
+  if (req.method !== "POST") {
+    res.setHeader("Allow", ["POST"]); // <--- this line is key for Vercel
+    return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+  }
 
+  try {
     const { clientName, phone, address, techId, price, type } = req.body || {};
     const db = await getDb();
 
-    const tech = await db.collection("technicians").findOne({ _id: new ObjectId(techId) });
+    const tech = await db
+      .collection("technicians")
+      .findOne({ _id: new ObjectId(techId) });
+
     if (!tech) {
       return res.status(400).json({ error: "Technician not found" });
     }
@@ -29,8 +34,10 @@ async function forwardHandler(req, res, user) {
       createdAt: new Date(),
     });
 
-    // ✅ Technician FCM token fetch
-    const fcmToken = await db.collection("fcm_tokens").findOne({ userId: techId, role: "technician" });
+    // ✅ Fetch technician’s FCM token
+    const fcmToken = await db
+      .collection("fcm_tokens")
+      .findOne({ userId: techId, role: "technician" });
 
     if (fcmToken?.token) {
       await sendNotification(
@@ -51,14 +58,15 @@ async function forwardHandler(req, res, user) {
   }
 }
 
-// ✅ Fix: only wrap in requireRole on server-side
-export default function handler(req, res) {
+// ✅ Final export (includes CORS + admin role protection)
+export default async function handler(req, res) {
+  // ✅ Allow preflight (CORS) requests
   if (req.method === "OPTIONS") {
-    // allow CORS preflight
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
     return res.status(200).end();
   }
 
-  // use dynamic import to avoid Next.js static analysis issue on Vercel
+  // ✅ Wrap with admin role validation
   const wrapped = requireRole("admin")(forwardHandler);
   return wrapped(req, res);
 }
