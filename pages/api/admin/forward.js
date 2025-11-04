@@ -1,19 +1,18 @@
+// pages/api/admin/forward.js
 import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
+// ✅ Wrapper function — no need to call extra wrapper at the end
 export default async function handler(req, res) {
-  // ✅ Set CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  // ✅ Handle preflight request
+  // ✅ Allow only POST + handle preflight CORS
   if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.status(200).end();
   }
 
-  // ✅ Block anything except POST
   if (req.method !== "POST") {
     res.setHeader("Allow", ["POST"]);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
@@ -54,6 +53,7 @@ export default async function handler(req, res) {
         `New client ${clientName} (${phone}) assigned to you.`,
         { techId }
       );
+      console.log("✅ Notification sent:", tech.username);
     }
 
     return res.status(200).json({ ok: true });
