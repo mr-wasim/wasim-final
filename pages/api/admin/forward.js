@@ -3,16 +3,8 @@ import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
-// ✅ Wrapper function — no need to call extra wrapper at the end
-export default async function handler(req, res) {
-  // ✅ Allow only POST + handle preflight CORS
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    return res.status(200).end();
-  }
-
+async function forwardHandler(req, res, user) {
+  // ✅ Handle only POST
   if (req.method !== "POST") {
     res.setHeader("Allow", ["POST"]);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
@@ -42,6 +34,7 @@ export default async function handler(req, res) {
       createdAt: new Date(),
     });
 
+    // ✅ FCM notification
     const fcmToken = await db
       .collection("fcm_tokens")
       .findOne({ userId: techId, role: "technician" });
@@ -53,7 +46,9 @@ export default async function handler(req, res) {
         `New client ${clientName} (${phone}) assigned to you.`,
         { techId }
       );
-      console.log("✅ Notification sent:", tech.username);
+      console.log("✅ Notification sent to technician:", tech.username);
+    } else {
+      console.log("⚠️ No FCM token found for technician:", techId);
     }
 
     return res.status(200).json({ ok: true });
@@ -61,4 +56,20 @@ export default async function handler(req, res) {
     console.error("❌ Error in forward API:", err);
     return res.status(500).json({ error: err.message });
   }
+}
+
+export default async function handler(req, res) {
+  // ✅ Allow OPTIONS requests (for preflight)
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
+    return res.status(200).end();
+  }
+
+  // ✅ Set CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  const wrapped = requireRole("admin")(forwardHandler);
+  return wrapped(req, res);
 }
