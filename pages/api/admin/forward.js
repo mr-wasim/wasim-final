@@ -3,8 +3,9 @@ import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
-async function forwardHandler(req, res, user) {
-  // ✅ Handle only POST
+// ---- helper: core logic ----
+async function forwardCore(req, res, user) {
+  // allow only POST
   if (req.method !== "POST") {
     res.setHeader("Allow", ["POST"]);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
@@ -12,64 +13,97 @@ async function forwardHandler(req, res, user) {
 
   try {
     const { clientName, phone, address, techId, price, type } = req.body || {};
+
+    // basic payload validate
+    if (!clientName || !phone || !address || !techId) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // validate ObjectId
+    if (!ObjectId.isValid(techId)) {
+      return res.status(400).json({ error: "Invalid technician id" });
+    }
+    const techObjectId = new ObjectId(techId);
+
     const db = await getDb();
 
     const tech = await db
       .collection("technicians")
-      .findOne({ _id: new ObjectId(techId) });
+      .findOne({ _id: techObjectId });
 
     if (!tech) {
-      return res.status(400).json({ error: "Technician not found" });
+      return res.status(404).json({ error: "Technician not found" });
     }
 
-    await db.collection("forwarded_calls").insertOne({
+    const insertDoc = {
       clientName,
       phone,
       address,
-      price,
-      type,
+      price: typeof price === "number" ? price : Number(price) || 0,
+      type: type || "general",
       techId: tech._id,
       techName: tech.username,
       status: "Pending",
       createdAt: new Date(),
-    });
+    };
 
-    // ✅ FCM notification
-    const fcmToken = await db
-      .collection("fcm_tokens")
-      .findOne({ userId: techId, role: "technician" });
+    const { insertedId } = await db
+      .collection("forwarded_calls")
+      .insertOne(insertDoc);
 
-    if (fcmToken?.token) {
-      await sendNotification(
-        fcmToken.token,
-        "📞 New Call Assigned",
-        `New client ${clientName} (${phone}) assigned to you.`,
-        { techId }
-      );
-      console.log("✅ Notification sent to technician:", tech.username);
-    } else {
-      console.log("⚠️ No FCM token found for technician:", techId);
+    // FCM notification (best-effort)
+    try {
+      const fcmToken = await db
+        .collection("fcm_tokens")
+        .findOne({ userId: techId, role: "technician" });
+
+      if (fcmToken?.token) {
+        await sendNotification(
+          fcmToken.token,
+          "📞 New Call Assigned",
+          `New client ${clientName} (${phone}) assigned to you.`,
+          { techId, forwardedCallId: String(insertedId) }
+        );
+        console.log("[forward] Notification sent →", tech.username);
+      } else {
+        console.log("[forward] No FCM token for tech:", techId);
+      }
+    } catch (notifErr) {
+      // don’t fail the whole API just for notification
+      console.warn("[forward] FCM notify failed:", notifErr?.message);
     }
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, id: String(insertedId) });
   } catch (err) {
-    console.error("❌ Error in forward API:", err);
-    return res.status(500).json({ error: err.message });
+    console.error("[forward] API error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 }
 
+// ---- exported handler (adds CORS + role) ----
 export default async function handler(req, res) {
-  // ✅ Allow OPTIONS requests (for preflight)
+  // CORS (adjust origin if you want to lock it down)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+
+  // preflight
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", ["POST", "OPTIONS"]);
     return res.status(200).end();
   }
 
-  // ✅ Set CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  const wrapped = requireRole("admin")(forwardHandler);
-  return wrapped(req, res);
+  // run with admin guard
+  const guarded = requireRole("admin")(forwardCore);
+  return guarded(req, res);
 }
+
+// (optional) make sure bodyParser is on (default true)
+export const config = {
+  api: {
+    bodyParser: true,
+  },
+};
