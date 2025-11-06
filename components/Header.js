@@ -14,7 +14,7 @@ import {
   FiPlus,
   FiBell,
   FiLogOut,
-  FiMapPin,
+
 } from "react-icons/fi";
 
 export default function Header({ user }) {
@@ -36,7 +36,7 @@ export default function Header({ user }) {
       { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
       { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
       { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus /> },
-      { href: "/admin/live-tracking", label: "Live Tracking", icon: <FiMapPin /> }, // ✅ Tracking menu added
+   
     ],
     technician: [
       { href: "/tech", label: "Dashboard", icon: <FiHome /> },
