@@ -1,4 +1,13 @@
-// pages/api/admin/forward.js
+// ✅ Force Node.js runtime (important for Vercel)
+export const runtime = "nodejs";
+
+// ✅ Ensure body parsing works properly
+export const config = {
+  api: {
+    bodyParser: true,
+  },
+};
+
 import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
@@ -69,7 +78,6 @@ async function forwardCore(req, res, user) {
         console.log("[forward] No FCM token for tech:", techId);
       }
     } catch (notifErr) {
-      // don’t fail the whole API just for notification
       console.warn("[forward] FCM notify failed:", notifErr?.message);
     }
 
@@ -82,7 +90,10 @@ async function forwardCore(req, res, user) {
 
 // ---- exported handler (adds CORS + role) ----
 export default async function handler(req, res) {
-  // CORS (adjust origin if you want to lock it down)
+  // ✅ Debug log for Vercel (to confirm route is executing)
+  console.log("[API] /api/admin/forward called with method:", req.method);
+
+  // ✅ CORS setup
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader(
@@ -90,20 +101,13 @@ export default async function handler(req, res) {
     "Content-Type, Authorization"
   );
 
-  // preflight
+  // ✅ Preflight support
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", ["POST", "OPTIONS"]);
     return res.status(200).end();
   }
 
-  // run with admin guard
+  // ✅ Role check (admin only)
   const guarded = requireRole("admin")(forwardCore);
   return guarded(req, res);
 }
-
-// (optional) make sure bodyParser is on (default true)
-export const config = {
-  api: {
-    bodyParser: true,
-  },
-};
