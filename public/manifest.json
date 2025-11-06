@@ -1,12 +1,23 @@
 {
-  "background_color": "#ffffff",
-  "dir": "ltr",
-  "display": "standalone",
-  "name": "wasim-final.vercel",
-  "orientation": "any",
-  "scope": "/",
+  "name": "Chimney CRM",
   "short_name": "ChimneyCRM",
+  "description": "Chimney Solutions CRM - Manage technicians, clients & services efficiently.",
   "start_url": "/",
-  "theme_color": "#1976d2",
-  "description": "Professional Chimney Service CRM for Technicians and Admins"
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f2937",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
