@@ -53,7 +53,7 @@ self.addEventListener("notificationclick", (event) => {
   // Redirect technician to their call list
   const targetUrl =
     event.notification?.data?.url ||
-    "https://wasim-final.vercel.app/tech/my-calls";
+    "https://wasim-final.vercel.app/tech/calls";
 
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
