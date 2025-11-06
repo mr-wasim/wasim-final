@@ -6,7 +6,7 @@ const nextConfig = {
     appDir: true,
   },
 
-  // ✅ Firebase service worker route rewrite (safe for Vercel)
+  // 🔥 Make sure the service worker is served from the root
   async rewrites() {
     return [
       {
@@ -16,16 +16,13 @@ const nextConfig = {
     ];
   },
 
-  // ✅ Optional: allow service worker full site scope
+  // 🔥 Give it full-site control
   async headers() {
     return [
       {
         source: "/firebase-messaging-sw.js",
         headers: [
-          {
-            key: "Service-Worker-Allowed",
-            value: "/",
-          },
+          { key: "Service-Worker-Allowed", value: "/" },
         ],
       },
     ];
