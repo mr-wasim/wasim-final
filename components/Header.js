@@ -1,6 +1,7 @@
+// components/Header.js
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FiMenu,
@@ -12,171 +13,319 @@ import {
   FiDollarSign,
   FiUsers,
   FiPlus,
-  FiBell,
   FiLogOut,
-
 } from "react-icons/fi";
 
-export default function Header({ user }) {
+/** Safe, SSR-friendly reduced-motion hook */
+function useSafeReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(!!mq.matches);
+    update();
+    if (mq.addEventListener) {
+      mq.addEventListener("change", update);
+      return () => mq.removeEventListener("change", update);
+    } else {
+      mq.addListener(update);
+      return () => mq.removeListener(update);
+    }
+  }, []);
+  return reduced;
+}
+
+export default function Header({
+  user = { role: "technician", name: "User", id: "" },
+}) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const shouldReduceMotion = useSafeReducedMotion();
 
-  const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
+  // UI: shadow on scroll
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Close menus on ESC
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setProfileOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const safeNavigate = (href) => {
+    if (!href) return;
+    if (router?.pathname === href) return; // avoid abort warning
+    router.push(href);
   };
 
-  const navLinks = {
-    admin: [
-      { href: "/admin", label: "Dashboard", icon: <FiHome /> },
-      { href: "/admin/forms", label: "Service Forms", icon: <FiFileText /> },
-      { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall /> },
-      { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall /> },
-      { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
-      { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
-      { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus /> },
-   
-    ],
-    technician: [
-      { href: "/tech", label: "Dashboard", icon: <FiHome /> },
-      { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign /> },
-    ],
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore
+    } finally {
+      safeNavigate("/login");
+    }
+  };
+
+  const navLinks = useMemo(
+    () => ({
+      admin: [
+        { href: "/admin", label: "Dashboard", icon: <FiHome aria-hidden="true" /> },
+        { href: "/admin/forms", label: "Service Forms", icon: <FiFileText aria-hidden="true" /> },
+        { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall aria-hidden="true" /> },
+        { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+        { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign aria-hidden="true" /> },
+        { href: "/admin/techs", label: "Technicians", icon: <FiUsers aria-hidden="true" /> },
+        { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus aria-hidden="true" /> },
+      ],
+      technician: [
+        { href: "/tech", label: "Dashboard", icon: <FiHome aria-hidden="true" /> },
+        { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign aria-hidden="true" /> },
+      ],
+    }),
+    []
+  );
+
+  const links = navLinks[user?.role] || [];
+  const isActive = (href) =>
+    router.pathname === href || router.pathname?.startsWith(href + "/");
+
+  const initials = (name) => {
+    const chars = (name || "")
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((s) => s[0]?.toUpperCase())
+      .join("");
+    return chars || "U";
   };
 
   return (
-    <header className="sticky top-0 z-50 bg-gradient-to-r from-[#2563eb] via-[#1e4ed8] to-[#2563eb] backdrop-blur-lg bg-opacity-90 shadow-lg transition-all duration-300">
-      <div className="max-w-7xl mx-auto flex justify-between items-center px-6 py-3">
-        {/* LOGO */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="md:hidden text-2xl text-white hover:scale-110 transition-transform"
-          >
-            {menuOpen ? <FiX /> : <FiMenu />}
-          </button>
-
-          <h1
-            onClick={() => router.push("/")}
-            className="text-xl md:text-2xl font-extrabold tracking-tight text-white cursor-pointer hover:scale-105 transition-transform"
-          >
-            Chimney <span className="text-blue-100">Solutions</span>
-          </h1>
-        </div>
-
-        {/* DESKTOP NAV */}
-        <nav className="hidden md:flex items-center gap-6 text-sm text-white font-medium relative">
-          {navLinks[user?.role]?.map((link) => (
-            <div key={link.href} className="group relative">
-              <Link
-                href={link.href}
-                className={`flex items-center gap-1.5 transition-all duration-200 ${
-                  router.pathname === link.href
-                    ? "text-white font-semibold"
-                    : "text-white/80 hover:text-white"
-                }`}
-              >
-                <span className="text-base">{link.icon}</span>
-                <span className="truncate">{link.label}</span>
-              </Link>
-              <span
-                className={`absolute left-0 bottom-[-5px] h-[2px] w-0 bg-white rounded-full transition-all duration-300 group-hover:w-full ${
-                  router.pathname === link.href ? "w-full" : ""
-                }`}
-              ></span>
-            </div>
-          ))}
-        </nav>
-
-        {/* RIGHT SIDE */}
-        <div className="flex items-center gap-4">
-          {/* Notification */}
-          <button className="relative text-white hover:scale-110 transition">
-            <FiBell className="text-lg" />
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">
-              3
-            </span>
-          </button>
-
-          {/* Profile */}
-          <div className="relative">
+    <>
+      {/* HEADER */}
+      <header
+        className={[
+          "sticky top-0 z-[90] transition-all duration-300",
+          "bg-gradient-to-r from-[#1e3a8a] via-[#1d4ed8] to-[#1e40af]",
+          "backdrop-blur-xl bg-opacity-90",
+          scrolled ? "shadow-2xl shadow-blue-900/20" : "shadow-lg shadow-blue-900/10",
+        ].join(" ")}
+        role="banner"
+      >
+        <div className="max-w-screen-2xl mx-auto flex items-center justify-between px-3 sm:px-6 py-3">
+          {/* Left: Logo + Mobile Toggle */}
+          <div className="flex items-center gap-3 min-w-0">
             <button
-              onClick={() => setProfileOpen(!profileOpen)}
-              className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm text-white font-semibold shadow-inner transition-all"
+              type="button"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((v) => !v)}
+              className="md:hidden text-2xl text-white hover:scale-110 active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-white/60 rounded-lg p-1"
             >
-              <FiUser />
-              {user?.name || "Profile"}
+              {menuOpen ? <FiX /> : <FiMenu />}
             </button>
 
-            <AnimatePresence>
-              {profileOpen && (
+            <Link href="/" className="select-none cursor-pointer group min-w-0">
+              <div className="flex items-center gap-2">
                 <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.2 }}
-                  className="absolute right-0 mt-3 w-52 bg-white rounded-xl shadow-xl overflow-hidden z-50"
+                  layout
+                  className="h-9 w-9 rounded-xl bg-white/15 ring-1 ring-white/20 grid place-items-center shadow-inner"
+                  whileHover={shouldReduceMotion ? {} : { rotate: 8, scale: 1.05 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
                 >
-                  <Link
-                    href="/tech/profile"
-                    className="flex items-center gap-2 px-4 py-2.5 text-gray-700 hover:bg-blue-50 transition text-sm"
-                  >
-                    <FiUser /> My Profile
-                  </Link>
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-red-600 hover:bg-red-50 transition text-sm"
-                  >
-                    <FiLogOut /> Logout
-                  </button>
+                  <span className="text-white font-black">CS</span>
                 </motion.div>
-              )}
-            </AnimatePresence>
+                <h1 className="text-xl md:text-2xl font-extrabold tracking-tight text-white truncate">
+                  Chimney <span className="text-blue-100">Solutions</span>
+                </h1>
+              </div>
+              <div className="h-0.5 w-0 group-hover:w-full transition-all duration-500 bg-white/30 rounded-full" />
+            </Link>
+          </div>
+
+          {/* Desktop Nav */}
+          <nav
+            aria-label="Primary"
+            className="hidden md:flex items-center justify-center flex-1 min-w-0 overflow-x-auto md:flex-wrap gap-1.5 text-sm text-white font-medium px-2"
+          >
+            {links.map((link) => (
+              <div key={link.href} className="relative group shrink-0">
+                <Link
+                  href={link.href}
+                  className={[
+                    "flex items-center gap-2 px-2.5 py-2 rounded-xl transition-all duration-200",
+                    isActive(link.href)
+                      ? "bg-white/15 ring-1 ring-white/20 text-white"
+                      : "text-white/80 hover:text-white hover:bg-white/10",
+                  ].join(" ")}
+                >
+                  <span className="text-base" aria-hidden="true">
+                    {link.icon}
+                  </span>
+                  <span className="truncate">{link.label}</span>
+                </Link>
+              </div>
+            ))}
+          </nav>
+
+          {/* Right: Actions (Profile only) */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setProfileOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={profileOpen}
+                className="flex items-center gap-2 bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-sm text-white font-semibold shadow-inner transition-all focus:outline-none focus:ring-2 focus:ring-white/60"
+              >
+                <div className="h-7 w-7 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center">
+                  <span className="text-[11px] font-bold">
+                    {initials(user?.name)}
+                  </span>
+                </div>
+                <span className="hidden sm:block max-w-[140px] truncate">
+                  {user?.name || "Profile"}
+                </span>
+                <FiUser aria-hidden="true" className="opacity-80" />
+              </button>
+
+              <AnimatePresence>
+                {profileOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: shouldReduceMotion ? 0 : 0.18 }}
+                    className="absolute right-0 mt-3 w-56 bg-white rounded-2xl shadow-2xl overflow-hidden z-[120] ring-1 ring-black/5"
+                    role="menu"
+                  >
+                    <div className="px-4 py-3 border-b border-gray-100">
+                      <p className="text-xs uppercase tracking-wider text-gray-500">
+                        Signed in as
+                      </p>
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {user?.name || "User"}
+                      </p>
+                      <p className="text-[11px] text-gray-500">
+                        Role: {user?.role || "guest"}
+                      </p>
+                    </div>
+                    <Link
+                      href={user?.role === "admin" ? "/admin" : "/tech/profile"}
+                      className="flex items-center gap-2 px-4 py-2.5 text-gray-700 hover:bg-blue-50 transition text-sm"
+                      role="menuitem"
+                      onClick={() => setProfileOpen(false)}
+                    >
+                      <FiUser aria-hidden="true" /> My Profile
+                    </Link>
+                    <button
+                      onClick={handleLogout}
+                      className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-red-600 hover:bg-red-50 transition text-sm"
+                      role="menuitem"
+                    >
+                      <FiLogOut aria-hidden="true" /> Logout
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* MOBILE MENU */}
+      {/* MOBILE OVERLAY + DRAWER OUTSIDE HEADER */}
       <AnimatePresence>
         {menuOpen && (
-          <motion.div
-            initial={{ x: "-100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "-100%" }}
-            transition={{ type: "spring", stiffness: 100, damping: 20 }}
-            className="fixed top-0 left-0 w-72 h-full bg-[#2563eb] text-white z-40 p-6 flex flex-col shadow-2xl md:hidden overflow-y-auto scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent"
-          >
-            <h2 className="text-base font-semibold mb-4 border-b border-white/20 pb-2">
-              {user?.role === "admin" ? "Admin Menu" : "Technician Menu"}
-            </h2>
+          <>
+            <motion.div
+              key="overlay"
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm md:hidden z-[100]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+              onClick={() => setMenuOpen(false)}
+            />
+            <motion.nav
+              key="drawer"
+              aria-label="Mobile"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{
+                type: shouldReduceMotion ? "tween" : "spring",
+                stiffness: 120,
+                damping: 18,
+              }}
+              className="fixed top-0 left-0 w-80 max-w-[85vw] h-full bg-gradient-to-b from-[#1d4ed8] to-[#1e40af] text-white z-[110] p-6 flex flex-col shadow-2xl md:hidden overflow-y-auto"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-lg bg-white/20 grid place-items-center ring-1 ring-white/20">
+                    <span className="text-xs font-bold">CS</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close menu"
+                  onClick={() => setMenuOpen(false)}
+                  className="text-2xl p-1 rounded-lg hover:bg-white/10"
+                >
+                  <FiX />
+                </button>
+              </div>
 
-            {navLinks[user?.role]?.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition ${
-                  router.pathname === link.href
-                    ? "bg-white/20 font-semibold"
-                    : "hover:bg-white/10"
-                }`}
-                onClick={() => setMenuOpen(false)}
-              >
-                {link.icon}
-                {link.label}
-              </Link>
-            ))}
+              <p className="text-xs uppercase tracking-wider text-white/80 mb-3">
+                {user?.role === "admin" ? "Admin Menu" : "Technician Menu"}
+              </p>
 
-            <div className="mt-auto pt-4 border-t border-white/20">
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 w-full px-3 py-2 bg-red-500 hover:bg-red-600 rounded-lg text-white text-sm font-semibold transition"
-              >
-                <FiLogOut /> Logout
-              </button>
-            </div>
-          </motion.div>
+              <div className="space-y-1">
+                {links.map((link) => (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className={[
+                      "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition",
+                      isActive(link.href)
+                        ? "bg-white/20 ring-1 ring-white/20"
+                        : "hover:bg-white/10",
+                    ].join(" ")}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <span className="text-lg" aria-hidden="true">
+                      {link.icon}
+                    </span>
+                    <span>{link.label}</span>
+                  </Link>
+                ))}
+              </div>
+
+              <div className="mt-auto pt-5">
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 w-full px-3 py-2.5 bg-red-500 hover:bg-red-600 rounded-xl text-white text-sm font-semibold transition shadow-lg"
+                >
+                  <FiLogOut aria-hidden="true" /> Logout
+                </button>
+                <p className="text-[11px] text-white/70 mt-3">v1.0 • Secure • Fast</p>
+              </div>
+            </motion.nav>
+          </>
         )}
       </AnimatePresence>
-    </header>
+    </>
   );
 }
