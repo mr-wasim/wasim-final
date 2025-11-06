@@ -1,32 +1,34 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+
   experimental: {
     appDir: true,
   },
+
+  // ✅ Firebase service worker route rewrite (safe for Vercel)
   async rewrites() {
     return [
       {
         source: "/firebase-messaging-sw.js",
-        destination: "/_next/static/firebase-messaging-sw.js",
+        destination: "/firebase-messaging-sw.js",
       },
     ];
   },
-  webpack: (config) => {
-    config.plugins.push({
-      apply: (compiler) => {
-        compiler.hooks.afterEmit.tap("CopyFirebaseSW", (compilation) => {
-          const fs = require("fs");
-          const path = require("path");
-          const from = path.resolve("./public/firebase-messaging-sw.js");
-          const to = path.resolve("./.next/static/firebase-messaging-sw.js");
-          if (fs.existsSync(from)) {
-            fs.copyFileSync(from, to);
-          }
-        });
+
+  // ✅ Optional: allow service worker full site scope
+  async headers() {
+    return [
+      {
+        source: "/firebase-messaging-sw.js",
+        headers: [
+          {
+            key: "Service-Worker-Allowed",
+            value: "/",
+          },
+        ],
       },
-    });
-    return config;
+    ];
   },
 };
 
