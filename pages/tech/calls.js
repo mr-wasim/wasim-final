@@ -1,53 +1,89 @@
 "use client";
 import Header from "../../components/Header";
 import BottomNav from "../../components/BottomNav";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
-import { FiClock, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
+import {
+  FiClock,
+  FiAlertTriangle,
+  FiCheckCircle,
+  FiRefreshCw,
+  FiPhone,
+  FiMapPin,
+} from "react-icons/fi";
 import {
   collection,
-  query,
+  query as fsQuery,
   where,
   onSnapshot,
   orderBy,
 } from "firebase/firestore";
-import { getToken, onMessage } from "firebase/messaging";
-import { db, messaging } from "../../lib/firebase"; // ✅ import added
+import { getToken, onMessage, isSupported } from "firebase/messaging";
+import { db, messaging } from "../../lib/firebase";
 
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
+const PAGE_SIZE = 5; // per page 5 hi dikhेंगे
+
+// =====================
+// UI: Skeleton loaders
+// =====================
+function Shimmer() {
+  return (
+    <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.6s_infinite] bg-gradient-to-r from-transparent via-white/40 to-transparent rounded-2xl" />
+  );
+}
+
+function CallCardSkeleton() {
+  return (
+    <div className="relative overflow-hidden rounded-2xl p-4 border border-slate-200/70 bg-white/60 backdrop-blur-xl">
+      <Shimmer />
+      <div className="flex items-center gap-3">
+        <div className="h-12 w-12 rounded-full bg-gray-200" />
+        <div className="flex-1">
+          <div className="h-5 w-40 bg-gray-200 rounded" />
+          <div className="mt-2 h-3 w-56 bg-gray-200 rounded" />
+        </div>
+      </div>
+      <div className="mt-3 h-3 w-64 bg-gray-200 rounded" />
+      <div className="mt-2 h-3 w-44 bg-gray-200 rounded" />
+      <div className="mt-2 h-10 w-full bg-gray-200 rounded" />
+    </div>
+  );
+}
 
 export default function Calls() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("All Calls");
-  const [items, setItems] = useState([]);
-  const [page, setPage] = useState(1);
-  const [count, setCount] = useState(0);
-  const loadingRef = useRef(false);
 
-  // ✅ Firebase Messaging setup
+  const [items, setItems] = useState([]);           // current page items only
+  const [page, setPage] = useState(1);              // 1-indexed
+  const [total, setTotal] = useState(0);            // server total (fallback handled)
+  const [hasMore, setHasMore] = useState(false);    // server hint for next page
+
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const [updatingId, setUpdatingId] = useState(null);
+
+  const loadingRef = useRef(false);
+  const abortRef = useRef(null);
+
+  // =====================
+  // Firebase Messaging (robust)
+  // =====================
   useEffect(() => {
     async function setupMessaging() {
-      // Wait until messaging initialized (for SSR)
-      const waitForMessaging = () =>
-        new Promise((resolve) => {
-          const check = () => {
-            if (window.firebaseMessaging) resolve(window.firebaseMessaging);
-            else setTimeout(check, 300);
-          };
-          check();
-        });
-
-      const msg = await waitForMessaging();
-
-      Notification.requestPermission().then(async (permission) => {
+      try {
+        const supported = await isSupported();
+        if (!supported) return;
+        if (!messaging) return;
+        const permission = await Notification.requestPermission();
         if (permission === "granted" && user?._id) {
           try {
-            const token = await getToken(msg, {
+            const token = await getToken(messaging, {
               vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
             });
             if (token) {
-              console.log("📱 Token:", token);
               await fetch("/api/save-fcm-token", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -55,30 +91,30 @@ export default function Calls() {
               });
             }
           } catch (err) {
-            console.error("❌ Token error:", err);
+            console.error("FCM token error:", err);
           }
         }
-      });
 
-      // Foreground notifications
-      onMessage(msg, (payload) => {
-        console.log("📩 New Message:", payload);
-        toast.custom(
-          <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
-            🔔 {payload.notification?.title || "New Notification"}
-            <div className="text-sm text-gray-100">
-              {payload.notification?.body}
-            </div>
-          </div>,
-          { duration: 5000 }
-        );
-      });
+        onMessage(messaging, (payload) => {
+          toast.custom(
+            <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg">
+              🔔 {payload.notification?.title || "New Notification"}
+              <div className="text-sm text-gray-100">{payload.notification?.body}</div>
+            </div>,
+            { duration: 5000 }
+          );
+        });
+      } catch (e) {
+        console.warn("Messaging not supported:", e?.message || e);
+      }
     }
 
-    if (typeof window !== "undefined") setupMessaging();
+    if (typeof window !== "undefined" && user) setupMessaging();
   }, [user]);
 
-  // Format "time ago"
+  // =====================
+  // Helpers
+  // =====================
   function timeAgo(dateStr) {
     if (!dateStr) return "";
     const date = new Date(dateStr);
@@ -92,63 +128,118 @@ export default function Calls() {
     return `${days}d ago`;
   }
 
-  // Load calls
-  async function load(showToast = false) {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    try {
-      const params = new URLSearchParams({ tab, page });
-      const r = await fetch("/api/tech/my-calls?" + params.toString(), {
-        cache: "no-store",
-      });
-      const d = await r.json();
-      if (d.success && Array.isArray(d.items)) {
-        const mapped = d.items.map((i) => ({
-          _id: i._id,
-          clientName: i.clientName || i.name || "",
-          phone: i.phone || "",
-          address: i.address || "",
-          type: i.type || i.service || "",
-          price: i.price || i.amount || 0,
-          status: i.status || "Pending",
-          createdAt: i.createdAt || i.created_at || "",
-        }));
-
-        let filtered = mapped;
-        const todayDate = new Date().toISOString().split("T")[0];
+  const filterItems = useCallback(
+    (list) => {
+      const todayDate = new Date().toISOString().split("T")[0];
+      const filtered = (() => {
         if (tab === "Today Calls") {
-          filtered = mapped.filter(
-            (c) => (c.createdAt ? c.createdAt.split("T")[0] : "") === todayDate
+          return list.filter((c) =>
+            (c.createdAt ? c.createdAt.split("T")[0] : "") === todayDate
           );
-        } else if (tab === "Pending") {
-          filtered = mapped.filter((c) => c.status === "Pending");
-        } else if (tab === "Closed") {
-          filtered = mapped.filter((c) => c.status === "Closed");
         }
+        if (tab === "Pending") return list.filter((c) => c.status === "Pending");
+        if (tab === "Closed") return list.filter((c) => c.status === "Closed");
+        return list;
+      })();
 
-        setItems(filtered);
-        setCount(filtered.length);
-        if (showToast) toast.success("Data updated");
+      return filtered;
+    },
+    [tab]
+  );
+
+  // =====================
+  // Data: fetch current page
+  // =====================
+  const load = useCallback(
+    async ({ reset = false, showToast = false } = {}) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+
+      if (abortRef.current) abortRef.current.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        if (reset) setInitialLoading(true);
+        setIsFetching(true);
+
+        const params = new URLSearchParams({
+          tab,
+          page: String(page),
+          pageSize: String(PAGE_SIZE),
+        });
+
+        const r = await fetch(`/api/tech/my-calls?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const d = await r.json();
+        if (d?.success && Array.isArray(d.items)) {
+          const mapped = d.items.map((i) => ({
+            _id: i._id,
+            clientName: i.clientName || i.name || "",
+            phone: i.phone || "",
+            address: i.address || "",
+            type: i.type || i.service || "",
+            price: i.price || i.amount || 0,
+            status: i.status || "Pending",
+            createdAt: i.createdAt || i.created_at || "",
+          }));
+
+          const filtered = filterItems(mapped);
+
+          const serverTotal =
+            typeof d.total === "number"
+              ? d.total
+              : typeof d.count === "number"
+              ? d.count
+              : d.itemsTotal ?? 0;
+
+          setTotal(serverTotal || 0);
+          setHasMore(
+            typeof d.hasMore === "boolean"
+              ? d.hasMore
+              : filtered.length === PAGE_SIZE
+          );
+
+          setItems(filtered);
+          if (showToast) toast.success("Data updated");
+        } else {
+          throw new Error(d?.error || "Failed to load calls");
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          console.error("Load error:", err);
+          toast.error(err.message || "Failed to load");
+        }
+      } finally {
+        setIsFetching(false);
+        setInitialLoading(false);
+        loadingRef.current = false;
       }
-    } catch (err) {
-      console.error("Load error:", err);
-    } finally {
-      loadingRef.current = false;
-    }
-  }
+    },
+    [tab, page, filterItems]
+  );
 
-  // Auth + realtime notifications
+  // Auth + realtime notifications (Firestore)
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me");
-      if (!me.ok) return (window.location.href = "/login");
+      if (!me.ok) {
+        window.location.href = "/login";
+        return;
+      }
       const u = await me.json();
-      if (u.role !== "technician") return (window.location.href = "/login");
+      if (u.role !== "technician") {
+        window.location.href = "/login";
+        return;
+      }
       setUser(u);
-      await load(false);
+      await load({ reset: true });
 
       if (db) {
-        const q = query(
+        const q = fsQuery(
           collection(db, "notifications"),
           where("to", "==", u.username || u.email || u._id),
           orderBy("createdAt", "desc")
@@ -158,7 +249,7 @@ export default function Calls() {
             if (change.type === "added") {
               const data = change.doc.data();
               toast.custom(
-                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg animate-bounce">
+                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg">
                   🔔 {data.message}
                 </div>,
                 { duration: 4000 }
@@ -171,20 +262,26 @@ export default function Calls() {
         console.warn("⚠️ Firestore not initialized.");
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Refresh handlers
+  // tab change → reset to page 1 and load
   useEffect(() => {
-    if (user) load(false);
-  }, [tab, page]);
+    setPage(1);
+  }, [tab]);
 
+  // load whenever page/tab/user ready
   useEffect(() => {
-    const t = setInterval(() => load(false), 30000);
-    return () => clearInterval(t);
-  }, [tab, page]);
+    if (!user) return;
+    load({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, tab, user]);
 
-  // Update call status
+  // Update status (same functionality)
   async function updateStatus(id, status) {
+    const prev = items;
+    setUpdatingId(id);
+    setItems((list) => list.map((c) => (c._id === id ? { ...c, status } : c)));
     try {
       const r = await fetch("/api/tech/update-call", {
         method: "POST",
@@ -194,8 +291,6 @@ export default function Calls() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Failed");
       toast.success("Status Updated");
-      await load(false);
-
       if (status === "Closed") {
         await fetch("/api/notify", {
           method: "POST",
@@ -203,16 +298,18 @@ export default function Calls() {
           body: JSON.stringify({
             to: "admin",
             title: "Call Closed ✅",
-            body: `${user.username || "Technician"} has closed a call.`,
+            body: `${user?.username || "Technician"} has closed a call.`,
           }),
         });
       }
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message || "Update failed");
+      setItems(prev); // rollback
+    } finally {
+      setUpdatingId(null);
     }
   }
 
-  // Start navigation
   function startNavigation(address) {
     if (!address) return toast.error("No address found!");
     if (navigator.geolocation) {
@@ -227,7 +324,10 @@ export default function Calls() {
           } else if (/iPhone|iPad|iPod/i.test(ua)) {
             window.location.href = `maps://?saddr=${origin}&daddr=${destination}&dirflg=d`;
           } else {
-            toast.error("Please open this on a mobile device to launch Google Maps.");
+            window.open(
+              `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`,
+              "_blank"
+            );
           }
         },
         () => toast.error("Please enable location to start navigation.")
@@ -235,144 +335,320 @@ export default function Calls() {
     } else toast.error("Geolocation not supported on this device.");
   }
 
+  // Derived
+  const totalPages = useMemo(() => {
+    if (total && total > 0) return Math.max(1, Math.ceil(total / PAGE_SIZE));
+    return hasMore ? page + 1 : page;
+  }, [total, page, hasMore]);
+
   return (
-    <div className="pb-16">
+    <div className="pb-20 min-h-screen bg-[radial-gradient(1200px_500px_at_50%_-10%,#e6f0ff,transparent),linear-gradient(to_bottom,#f8fbff,#ffffff)]">
       <Header user={user} />
-      <main className="max-w-3xl mx-auto p-4 space-y-3">
+
+      <main className="max-w-3xl mx-auto p-4 space-y-4">
         {/* Tabs */}
-        <div className="card">
-          <div className="flex gap-2 overflow-x-auto">
-            {TABS.map((t) => (
+        <div className="sticky top-0 z-20">
+          <div className="rounded-2xl border bg-white/70 backdrop-blur-xl supports-[backdrop-filter]:bg-white/60 shadow-sm">
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide p-2">
+              {TABS.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    setTab(t);
+                  }}
+                  className={`whitespace-nowrap px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-300 border ${
+                    tab === t
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md scale-[1.02] border-transparent"
+                      : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
               <button
-                key={t}
                 onClick={() => {
-                  setTab(t);
-                  setPage(1);
+                  load({ reset: true, showToast: true });
                 }}
-                className={`btn whitespace-nowrap transition-all duration-300 ${
-                  tab === t
-                    ? "bg-blue-600 text-white scale-105 shadow-md"
-                    : "bg-gray-100 hover:bg-gray-200"
-                }`}
+                className="ml-auto px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 flex items-center gap-2 hover:bg-slate-50"
+                title="Refresh"
+                disabled={isFetching}
               >
-                {t}
+                <motion.span
+                  animate={{ rotate: isFetching ? 360 : 0 }}
+                  transition={{ repeat: isFetching ? Infinity : 0, duration: 1 }}
+                >
+                  <FiRefreshCw />
+                </motion.span>
+                Refresh
               </button>
-            ))}
+            </div>
           </div>
         </div>
 
+        {/* Meta */}
+        <div className="text-xs sm:text-sm text-gray-600 px-1">
+          Page <span className="font-semibold">{page}</span> of{" "}
+          <span className="font-semibold">{totalPages}</span>{" "}
+          <span className="ml-2">({items.length} on this page)</span>
+          {typeof total === "number" && total > 0 && (
+            <span className="ml-2">
+              • Total: <span className="font-semibold">{total}</span>
+            </span>
+          )}
+        </div>
+
         {/* Calls List */}
-        <div className="card space-y-3">
-          {items.length === 0 && (
-            <p className="text-center text-gray-500">No calls found</p>
+        <div className="space-y-3">
+          {initialLoading && (
+            <>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <CallCardSkeleton key={i} />
+              ))}
+            </>
           )}
 
-          {items.map((call) => {
-            const pending = call.status === "Pending";
-            const closed = call.status === "Closed";
+          {!initialLoading && items.length === 0 && (
+            <div className="rounded-2xl border border-dashed p-10 text-center text-gray-500 bg-white/60 backdrop-blur-xl">
+              No calls found
+            </div>
+          )}
 
-            return (
-              <motion.div
-                key={call._id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-                className={`border rounded-xl p-4 transition-all duration-300 hover:shadow-lg ${
-                  pending
-                    ? "bg-gradient-to-r from-red-50 via-orange-50 to-orange-100 border-orange-300"
-                    : closed
-                    ? "bg-gradient-to-r from-green-50 via-emerald-50 to-emerald-100 border-green-300"
-                    : "bg-white"
-                }`}
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-700 bg-clip-text text-transparent">
-                      {call.clientName}
+          {!initialLoading &&
+            items.map((call, idx) => {
+              const pending = call.status === "Pending";
+              const closed = call.status === "Closed";
+              const uniqueKey = `${call._id || "row"}_${call.createdAt || "t"}_${idx}`;
+
+              return (
+                <motion.div
+                  key={uniqueKey}
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.35 }}
+                  className={`relative overflow-hidden rounded-2xl border backdrop-blur-xl transition-all duration-300 hover:shadow-xl ${
+                    pending
+                      ? "border-rose-200/70 bg-gradient-to-br from-white/80 via-rose-50/70 to-white/70"
+                      : closed
+                      ? "border-emerald-200/70 bg-gradient-to-br from-white/80 via-emerald-50/70 to-white/70"
+                      : "border-slate-200/70 bg-white/70"
+                  }`}
+                >
+                  {/* Ribbons */}
+                  {pending && (
+                    <div className="absolute right-0 top-0">
+                      <div className="px-2 py-1 text-[10px] sm:text-xs font-bold text-white bg-rose-600 rounded-bl-xl">
+                        MISSED / PENDING
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-600">
-                      <strong>Phone:</strong> {call.phone}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      <strong>Address:</strong> {call.address}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      <strong>Type:</strong> {call.type}
-                    </p>
-                    <p className="text-sm text-gray-600">
-                      <strong>Price:</strong> ₹{call.price}
-                    </p>
-                    <div className="flex items-center mt-1 text-xs text-gray-500">
-                      <FiClock className="mr-1" />
-                      Received {timeAgo(call.createdAt)}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-center">
-                    {pending && (
-                      <motion.div
-                        animate={{ scale: [1, 1.2, 1] }}
-                        transition={{ repeat: Infinity, duration: 1.2 }}
-                        className="text-orange-600"
-                      >
-                        <FiAlertTriangle size={22} />
-                      </motion.div>
-                    )}
-                    {closed && (
-                      <motion.div
-                        initial={{ rotate: -15, scale: 0.8 }}
-                        animate={{ rotate: 0, scale: 1 }}
-                        transition={{ type: "spring", stiffness: 200 }}
-                        className="text-green-600"
-                      >
-                        <FiCheckCircle size={24} />
-                      </motion.div>
-                    )}
-                    <span
-                      className={`text-xs font-semibold mt-1 ${
-                        pending ? "text-orange-600" : "text-green-700"
-                      }`}
-                    >
-                      {call.status}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Buttons */}
-                <div className="flex gap-2 mt-3">
-                  <a className="btn bg-green-600 text-white" href={`tel:${call.phone}`}>
-                    Call
-                  </a>
-                  <button
-                    className="btn bg-gray-100"
-                    onClick={() => startNavigation(call.address)}
-                  >
-                    Go
-                  </button>
-                  {tab === "All Calls" ? (
-                    <select
-                      className="input"
-                      value={call.status}
-                      onChange={(e) => updateStatus(call._id, e.target.value)}
-                    >
-                      <option>Pending</option>
-                      <option>Closed</option>
-                    </select>
-                  ) : (
-                    <button
-                      className="btn bg-gray-100"
-                      onClick={() => updateStatus(call._id, "Closed")}
-                    >
-                      Close Call
-                    </button>
                   )}
-                </div>
+                  {closed && (
+                    <div className="absolute right-0 top-0">
+                      <div className="px-2 py-1 text-[10px] sm:text-xs font-bold text-white bg-emerald-600 rounded-bl-xl">
+                        CALL ENDED
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Ringing / Ended aura */}
+                  {pending && (
+                    <div className="pointer-events-none absolute -inset-1 rounded-3xl ring-1 ring-rose-300/30">
+                      <div className="absolute -z-10 inset-0 animate-pulse bg-[radial-gradient(400px_200px_at_95%_-20%,rgba(244,63,94,0.12),transparent)]" />
+                    </div>
+                  )}
+                  {closed && (
+                    <div className="pointer-events-none absolute -inset-1 rounded-3xl ring-1 ring-emerald-300/30">
+                      <div className="absolute -z-10 inset-0 animate-pulse bg-[radial-gradient(400px_200px_at_95%_-20%,rgba(16,185,129,0.12),transparent)]" />
+                    </div>
+                  )}
+
+                  {/* Header row */}
+                  <div className="p-4 pb-2 flex items-start gap-3">
+                    {/* Avatar with ripple for ringing */}
+                    <div className="relative">
+                      <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 shadow-md flex items-center justify-center text-white font-bold">
+                        {String(call.clientName || "?")
+                          .trim()
+                          .slice(0, 1)
+                          .toUpperCase()}
+                      </div>
+
+                      {/* Ringing ripples */}
+                      {pending && (
+                        <>
+                          <span className="absolute -inset-1 rounded-3xl border border-rose-400/30 animate-[ping_1.6s_linear_infinite]" />
+                          <span className="absolute -inset-2 rounded-3xl border border-rose-300/20 animate-[ping_2.2s_linear_infinite]" />
+                        </>
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">
+                          {call.clientName}
+                        </h3>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide ${
+                            pending
+                              ? "bg-rose-100 text-rose-700"
+                              : "bg-emerald-100 text-emerald-700"
+                          }`}
+                        >
+                          {call.status}
+                        </span>
+                      </div>
+
+                      <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-[13px] text-slate-700">
+                        <div className="flex items-center gap-2">
+                          <FiPhone className="opacity-70" />
+                          <span className="truncate">{call.phone}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <FiMapPin className="opacity-70" />
+                          <span className="truncate">{call.address}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">Type:</span>
+                          <span className="truncate">{call.type}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">Price:</span>₹{call.price}
+                        </div>
+                      </div>
+
+                      <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                        <FiClock className="shrink-0" />
+                        Received {timeAgo(call.createdAt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action bar */}
+                  <div className="px-4 pb-4 pt-2">
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold shadow-sm transition-all ${
+                          pending
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                            : "bg-slate-900 hover:bg-black text-white"
+                        }`}
+                        href={`tel:${call.phone}`}
+                      >
+                        <motion.span
+                          animate={pending ? { scale: [1, 1.08, 1] } : {}}
+                          transition={{ repeat: pending ? Infinity : 0, duration: 1.3 }}
+                          className="inline-flex"
+                        >
+                          <FiPhone />
+                        </motion.span>
+                        Call
+                      </a>
+
+                      <button
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50"
+                        onClick={() => startNavigation(call.address)}
+                      >
+                        <FiMapPin />
+                        Go
+                      </button>
+
+                      {tab === "All Calls" ? (
+                        <select
+                          className="px-3 py-2 rounded-xl border bg-white text-sm"
+                          value={call.status}
+                          disabled={updatingId === call._id}
+                          onChange={(e) => updateStatus(call._id, e.target.value)}
+                        >
+                          <option>Pending</option>
+                          <option>Closed</option>
+                        </select>
+                      ) : (
+                        <button
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                          disabled={updatingId === call._id}
+                          onClick={() => updateStatus(call._id, "Closed")}
+                        >
+                          {updatingId === call._id ? (
+                            <>
+                              <motion.span
+                                animate={{ rotate: 360 }}
+                                transition={{ repeat: Infinity, duration: 1 }}
+                                className="inline-flex"
+                              >
+                                <FiRefreshCw />
+                              </motion.span>
+                              Updating...
+                            </>
+                          ) : (
+                            <>
+                              <FiCheckCircle />
+                              Close Call
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+
+          {/* Pagination controls */}
+          {!initialLoading && (
+            <div className="flex items-center justify-between pt-2">
+              <button
+                className="px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || isFetching}
+              >
+                ← Prev
+              </button>
+
+              <div className="text-xs text-gray-600">
+                Page {page} / {totalPages}
+              </div>
+
+              <button
+                className="px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={(!hasMore && page >= totalPages) || isFetching}
+              >
+                Next →
+              </button>
+            </div>
+          )}
+
+          {/* Loading spinner for fetch */}
+          {isFetching && !initialLoading && (
+            <div className="flex items-center justify-center py-3 text-sm text-gray-600">
+              <motion.div
+                className="mr-2"
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1 }}
+              >
+                <FiRefreshCw />
               </motion.div>
-            );
-          })}
+              Loading...
+            </div>
+          )}
         </div>
       </main>
+
       <BottomNav />
+
+      <style jsx global>{`
+        @keyframes shimmer {
+          100% {
+            transform: translateX(100%);
+          }
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+        }
+        .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
     </div>
   );
 }

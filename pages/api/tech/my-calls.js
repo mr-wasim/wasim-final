@@ -2,18 +2,32 @@
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 
+const ALLOWED_TABS = new Set(["All Calls", "Today Calls", "Pending", "Completed", "Closed"]);
+const PAGE_SIZE = 4;
+
 async function handler(req, res, user) {
+  if (req.method !== "GET") return res.status(405).end();
+
   try {
-    const { tab = "All Calls", page = 1 } = req.query;
+    // ---- query parse & sanitize ----
+    let { tab = "All Calls", page = 1 } = req.query;
+    tab = String(tab);
+    if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
+
+    page = parseInt(page, 10);
+    if (Number.isNaN(page) || page < 1) page = 1;
+
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
 
-    const techId = ObjectId.isValid(user.id) ? new ObjectId(user.id) : user.id;
+    // techId may be string or ObjectId in DB
+    const techIdCandidates = [user.id];
+    if (ObjectId.isValid(user.id)) techIdCandidates.push(new ObjectId(user.id));
 
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const match = { techId };
+    const match = { techId: { $in: techIdCandidates } };
     switch (tab) {
       case "Today Calls":
         match.createdAt = { $gte: todayStart };
@@ -24,13 +38,14 @@ async function handler(req, res, user) {
         match.status = tab;
         break;
       default:
+        // All Calls -> no extra filter
         break;
     }
 
-    const limit = 4;
-    const skip = (Number(page) - 1) * limit;
+    const limit = PAGE_SIZE;
+    const skip = (page - 1) * limit;
 
-    // 🚀 Single round-trip (items + total) + server-side mapping
+    // ---- single round-trip: items + total (server-side mapping) ----
     const pipeline = [
       { $match: match },
       { $sort: { createdAt: -1 } },
@@ -76,9 +91,9 @@ async function handler(req, res, user) {
     const items = result?.items ?? [];
     const total = result?.total?.[0]?.count ?? 0;
 
-    // Per-user data → no caching
+    // Per-user data → no cache
     res.setHeader("Cache-Control", "private, no-store");
-    return res.json({ success: true, items, total });
+    return res.status(200).json({ success: true, items, total });
   } catch (err) {
     console.error("forwarded-calls error:", err);
     return res.status(500).json({ success: false, error: "Internal Server Error" });
@@ -86,3 +101,7 @@ async function handler(req, res, user) {
 }
 
 export default requireRole("technician")(handler);
+
+// 👍 Indexes (once via migration/shell):
+// db.forwarded_calls.createIndex({ techId: 1, createdAt: -1 });
+// db.forwarded_calls.createIndex({ techId: 1, status: 1, createdAt: -1 });
