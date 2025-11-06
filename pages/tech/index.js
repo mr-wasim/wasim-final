@@ -11,7 +11,7 @@ export default function TechHome() {
   const [form, setForm] = useState({
     clientName: "",
     address: "",
-    payment: 0,
+    payment: "",
     phone: "",
     status: "Services Done",
     signature: "",
