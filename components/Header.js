@@ -44,7 +44,6 @@ export default function Header({
   const [scrolled, setScrolled] = useState(false);
   const shouldReduceMotion = useSafeReducedMotion();
 
-  // UI: shadow on scroll
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
     onScroll();
@@ -52,7 +51,6 @@ export default function Header({
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Close menus on ESC
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") {
@@ -66,18 +64,15 @@ export default function Header({
 
   const safeNavigate = (href) => {
     if (!href) return;
-    if (router?.pathname === href) return; // avoid abort warning
+    if (router?.pathname === href) return;
     router.push(href);
   };
 
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-    } catch {
-      // ignore
-    } finally {
-      safeNavigate("/login");
-    }
+    } catch {}
+    finally { safeNavigate("/login"); }
   };
 
   const navLinks = useMemo(
@@ -113,9 +108,10 @@ export default function Header({
     return chars || "U";
   };
 
+  const isAdmin = user?.role === "admin";
+
   return (
     <>
-      {/* HEADER */}
       <header
         className={[
           "sticky top-0 z-[90] transition-all duration-300",
@@ -159,26 +155,81 @@ export default function Header({
           {/* Desktop Nav */}
           <nav
             aria-label="Primary"
-            className="hidden md:flex items-center justify-center flex-1 min-w-0 overflow-x-auto md:flex-wrap gap-1.5 text-sm text-white font-medium px-2"
+            className="hidden md:flex items-center justify-center flex-1 min-w-0 px-2"
           >
-            {links.map((link) => (
-              <div key={link.href} className="relative group shrink-0">
-                <Link
-                  href={link.href}
-                  className={[
-                    "flex items-center gap-2 px-2.5 py-2 rounded-xl transition-all duration-200",
-                    isActive(link.href)
-                      ? "bg-white/15 ring-1 ring-white/20 text-white"
-                      : "text-white/80 hover:text-white hover:bg-white/10",
-                  ].join(" ")}
+            {isAdmin ? (
+              // ===== Admin PC view: upgraded segmented / pills =====
+              <div className="relative w-full max-w-[980px]">
+                {/* Fades to hint scroll but keep it hidden */}
+                <div className="pointer-events-none absolute left-0 top-0 h-full w-6 rounded-l-[22px] bg-gradient-to-r from-white/80 to-transparent" />
+                <div className="pointer-events-none absolute right-0 top-0 h-full w-6 rounded-r-[22px] bg-gradient-to-l from-white/80 to-transparent" />
+
+                <div
+                  className="relative bg-white/90 backdrop-blur rounded-[22px] p-1 shadow-sm ring-1 ring-black/5
+                             flex items-center gap-1 overflow-x-auto no-scrollbar"
                 >
-                  <span className="text-base" aria-hidden="true">
-                    {link.icon}
-                  </span>
-                  <span className="truncate">{link.label}</span>
-                </Link>
+                  {links.map((link) => {
+                    const active = isActive(link.href);
+                    return (
+                      <Link
+                        key={link.href}
+                        href={link.href}
+                        aria-current={active ? "page" : undefined}
+                        className="relative block"
+                      >
+                        <span
+                          className={[
+                            "flex items-center gap-2 px-4 py-2 rounded-[18px] text-sm whitespace-nowrap",
+                            "transition-[transform,box-shadow] duration-200",
+                            active
+                              ? "text-white"
+                              : "text-gray-700 hover:text-gray-900",
+                          ].join(" ")}
+                        >
+                          {/* animated active BG */}
+                          {active && (
+                            <motion.span
+                              layoutId="adminTabHighlight"
+                              transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                              className="absolute inset-0 rounded-[18px] bg-gradient-to-r from-indigo-600 to-blue-600 shadow-md"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span className="relative z-[1] text-base opacity-90">
+                            {link.icon}
+                          </span>
+                          <span className="relative z-[1] truncate font-medium">
+                            {link.label}
+                          </span>
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
               </div>
-            ))}
+            ) : (
+              // ===== Technician (unchanged) =====
+              <div className="flex items-center justify-center flex-1 min-w-0 overflow-x-auto no-scrollbar md:flex-wrap gap-1.5 text-sm text-white font-medium">
+                {links.map((link) => (
+                  <div key={link.href} className="relative group shrink-0">
+                    <Link
+                      href={link.href}
+                      className={[
+                        "flex items-center gap-2 px-2.5 py-2 rounded-xl transition-all duration-200",
+                        isActive(link.href)
+                          ? "bg-white/15 ring-1 ring-white/20 text-white"
+                          : "text-white/80 hover:text-white hover:bg-white/10",
+                      ].join(" ")}
+                    >
+                      <span className="text-base" aria-hidden="true">
+                        {link.icon}
+                      </span>
+                      <span className="truncate">{link.label}</span>
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            )}
           </nav>
 
           {/* Right: Actions (Profile only) */}
@@ -326,6 +377,12 @@ export default function Header({
           </>
         )}
       </AnimatePresence>
+
+      {/* Hide scrollbars globally for .no-scrollbar but keep scrolling */}
+      <style jsx global>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
     </>
   );
 }
