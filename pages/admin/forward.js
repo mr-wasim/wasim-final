@@ -6,6 +6,7 @@ export default function Forward() {
   const [user, setUser] = useState(null);
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(false);
+
   const [form, setForm] = useState({
     clientName: "",
     phone: "",
@@ -13,6 +14,8 @@ export default function Forward() {
     techId: "",
     price: "",
     type: "",
+    timeZone: "",
+    notes: "",
   });
 
   // ✅ Fetch logged-in user + technicians
@@ -59,7 +62,6 @@ export default function Forward() {
         body: JSON.stringify(form),
       });
 
-      // ✅ Handle empty response safely (avoid "Unexpected end of JSON input")
       let d = {};
       try {
         d = await r.json();
@@ -73,6 +75,8 @@ export default function Forward() {
       }
 
       toast.success("Call forwarded successfully ✅");
+
+      // RESET FORM
       setForm({
         clientName: "",
         phone: "",
@@ -80,7 +84,10 @@ export default function Forward() {
         techId: "",
         price: "",
         type: "",
+        timeZone: "",
+        notes: "",
       });
+
     } catch (err) {
       console.error("Submit error:", err);
       toast.error("Network or server error");
@@ -95,7 +102,9 @@ export default function Forward() {
       <main className="max-w-3xl mx-auto p-4 space-y-3">
         <div className="card p-4 shadow-md rounded-xl border border-gray-200">
           <div className="font-semibold text-lg mb-3">📞 Call Forwarding</div>
+
           <form onSubmit={submit} className="grid gap-3">
+
             <input
               className="input border p-2 rounded"
               placeholder="Client Name"
@@ -103,6 +112,7 @@ export default function Forward() {
               onChange={(e) => setForm({ ...form, clientName: e.target.value })}
               required
             />
+
             <input
               className="input border p-2 rounded"
               placeholder="Client Phone Number"
@@ -110,6 +120,7 @@ export default function Forward() {
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
               required
             />
+
             <input
               className="input border p-2 rounded"
               placeholder="Address"
@@ -118,7 +129,7 @@ export default function Forward() {
               required
             />
 
-            {/* ✅ Price */}
+            {/* Price */}
             <input
               className="input border p-2 rounded"
               placeholder="Price"
@@ -129,7 +140,7 @@ export default function Forward() {
               required
             />
 
-            {/* ✅ Type */}
+            {/* Type */}
             <input
               className="input border p-2 rounded"
               placeholder="Type (e.g. Chimney / Hob)"
@@ -138,7 +149,24 @@ export default function Forward() {
               required
             />
 
-            {/* ✅ Technician Select */}
+            {/* ⏰ Time Zone (New Field) */}
+            <input
+              className="input border p-2 rounded"
+              placeholder="Time Zone (e.g. Morning / Evening / After 6 PM)"
+              value={form.timeZone}
+              onChange={(e) => setForm({ ...form, timeZone: e.target.value })}
+            />
+
+            {/* 📝 Notes (New Field) */}
+            <textarea
+              className="input border p-2 rounded"
+              placeholder="Notes (Any special instructions / issues)"
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            />
+
+            {/* Technician */}
             <select
               className="input border p-2 rounded"
               value={form.techId}

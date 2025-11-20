@@ -9,7 +9,6 @@ async function handler(req, res, user) {
   if (req.method !== "GET") return res.status(405).end();
 
   try {
-    // ---- query parse & sanitize ----
     let { tab = "All Calls", page = 1 } = req.query;
     tab = String(tab);
     if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
@@ -20,7 +19,6 @@ async function handler(req, res, user) {
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
 
-    // techId may be string or ObjectId in DB
     const techIdCandidates = [user.id];
     if (ObjectId.isValid(user.id)) techIdCandidates.push(new ObjectId(user.id));
 
@@ -38,14 +36,12 @@ async function handler(req, res, user) {
         match.status = tab;
         break;
       default:
-        // All Calls -> no extra filter
         break;
     }
 
     const limit = PAGE_SIZE;
     const skip = (page - 1) * limit;
 
-    // ---- single round-trip: items + total (server-side mapping) ----
     const pipeline = [
       { $match: match },
       { $sort: { createdAt: -1 } },
@@ -57,6 +53,7 @@ async function handler(req, res, user) {
             {
               $project: {
                 _id: { $toString: "$_id" },
+
                 clientName: {
                   $ifNull: [
                     "$clientName",
@@ -73,12 +70,17 @@ async function handler(req, res, user) {
                     },
                   ],
                 },
+
                 phone: { $ifNull: ["$phone", ""] },
                 address: { $ifNull: ["$address", ""] },
                 type: { $ifNull: ["$type", ""] },
                 price: { $ifNull: ["$price", 0] },
                 status: { $ifNull: ["$status", "Pending"] },
                 createdAt: 1,
+
+                // 🔥 ADDED FIELDS (FIX)
+                timeZone: { $ifNull: ["$timeZone", ""] },
+                notes: { $ifNull: ["$notes", ""] },
               },
             },
           ],
@@ -87,11 +89,10 @@ async function handler(req, res, user) {
       },
     ];
 
-    const [result] = await coll.aggregate(pipeline, { allowDiskUse: false }).toArray();
+    const [result] = await coll.aggregate(pipeline).toArray();
     const items = result?.items ?? [];
     const total = result?.total?.[0]?.count ?? 0;
 
-    // Per-user data → no cache
     res.setHeader("Cache-Control", "private, no-store");
     return res.status(200).json({ success: true, items, total });
   } catch (err) {
@@ -101,7 +102,3 @@ async function handler(req, res, user) {
 }
 
 export default requireRole("technician")(handler);
-
-// 👍 Indexes (once via migration/shell):
-// db.forwarded_calls.createIndex({ techId: 1, createdAt: -1 });
-// db.forwarded_calls.createIndex({ techId: 1, status: 1, createdAt: -1 });

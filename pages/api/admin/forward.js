@@ -12,30 +12,40 @@ import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
-// ---- helper: core logic ----
+// ---- Core Logic ----
 async function forwardCore(req, res, user) {
-  // allow only POST
   if (req.method !== "POST") {
     res.setHeader("Allow", ["POST"]);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
 
   try {
-    const { clientName, phone, address, techId, price, type } = req.body || {};
+    const {
+      clientName,
+      phone,
+      address,
+      techId,
+      price,
+      type,
 
-    // basic payload validate
+      // NEW FIELDS
+      timeZone,
+      notes,
+    } = req.body || {};
+
+    // ---- VALIDATION ----
     if (!clientName || !phone || !address || !techId) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // validate ObjectId
     if (!ObjectId.isValid(techId)) {
-      return res.status(400).json({ error: "Invalid technician id" });
+      return res.status(400).json({ error: "Invalid technician ID" });
     }
-    const techObjectId = new ObjectId(techId);
 
+    const techObjectId = new ObjectId(techId);
     const db = await getDb();
 
+    // ---- Fetch Technician ----
     const tech = await db
       .collection("technicians")
       .findOne({ _id: techObjectId });
@@ -44,23 +54,29 @@ async function forwardCore(req, res, user) {
       return res.status(404).json({ error: "Technician not found" });
     }
 
+    // ---- Prepare Insert Document ----
     const insertDoc = {
       clientName,
       phone,
       address,
-      price: typeof price === "number" ? price : Number(price) || 0,
+      price: Number(price) || 0,
       type: type || "general",
+      timeZone: timeZone || "",
+      notes: notes || "",
       techId: tech._id,
       techName: tech.username,
       status: "Pending",
       createdAt: new Date(),
     };
 
-    const { insertedId } = await db
+    // ---- Insert into DB ----
+    const result = await db
       .collection("forwarded_calls")
       .insertOne(insertDoc);
 
-    // FCM notification (best-effort)
+    const insertedId = result.insertedId.toString();
+
+    // ---- Notification (safe mode) ----
     try {
       const fcmToken = await db
         .collection("fcm_tokens")
@@ -70,46 +86,46 @@ async function forwardCore(req, res, user) {
         await sendNotification(
           fcmToken.token,
           "📞 New Call Assigned",
-          `New client ${clientName} (${phone}) assigned to you.`,
-          { techId, forwardedCallId: String(insertedId) }
+          `Client ${clientName} (${phone}) assigned to you.`,
+          {
+            forwardedCallId: insertedId,
+            techId,
+            timeZone: timeZone || "",
+            notes: notes || "",
+          }
         );
+
         console.log("[forward] Notification sent →", tech.username);
       } else {
-        console.log("[forward] No FCM token for tech:", techId);
+        console.log("[forward] No FCM token found for technician:", techId);
       }
-    } catch (notifErr) {
-      console.warn("[forward] FCM notify failed:", notifErr?.message);
+    } catch (notifyErr) {
+      console.warn("[forward] Notification failed:", notifyErr.message);
     }
 
-    return res.status(200).json({ ok: true, id: String(insertedId) });
+    return res.status(200).json({ ok: true, id: insertedId });
+
   } catch (err) {
-    console.error("[forward] API error:", err);
+    console.error("[forward] API Main Error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 }
 
-// ---- exported handler (adds CORS + role) ----
+// ---- Exported Handler (CORS + Role Guard) ----
 export default async function handler(req, res) {
-  // ✅ Debug log for Vercel (to confirm route is executing)
-  console.log("[API] /api/admin/forward called with method:", req.method);
+  console.log("[API] /api/admin/forward → method:", req.method);
 
-  // ✅ CORS setup
+  // ---- CORS ----
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  // ✅ Preflight support
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", ["POST", "OPTIONS"]);
     return res.status(200).end();
   }
 
-  // ✅ Role check (admin only)
+  // ---- Admin Check ----
   const guarded = requireRole("admin")(forwardCore);
   return guarded(req, res);
 }
-
-

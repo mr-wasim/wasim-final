@@ -82,6 +82,10 @@ export default function Header({
         { href: "/admin/forms", label: "Service Forms", icon: <FiFileText aria-hidden="true" /> },
         { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall aria-hidden="true" /> },
         { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+
+        // ⭐ NEW MENU HERE ⭐
+        { href: "/admin/all-calls", label: "All Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+
         { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign aria-hidden="true" /> },
         { href: "/admin/techs", label: "Technicians", icon: <FiUsers aria-hidden="true" /> },
         { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus aria-hidden="true" /> },
@@ -122,7 +126,8 @@ export default function Header({
         role="banner"
       >
         <div className="max-w-screen-2xl mx-auto flex items-center justify-between px-3 sm:px-6 py-3">
-          {/* Left: Logo + Mobile Toggle */}
+
+          {/* LEFT SIDE */}
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -152,41 +157,25 @@ export default function Header({
             </Link>
           </div>
 
-          {/* Desktop Nav */}
-          <nav
-            aria-label="Primary"
-            className="hidden md:flex items-center justify-center flex-1 min-w-0 px-2"
-          >
+          {/* DESKTOP NAV */}
+          <nav aria-label="Primary" className="hidden md:flex items-center justify-center flex-1 min-w-0 px-2">
             {isAdmin ? (
-              // ===== Admin PC view: upgraded segmented / pills =====
               <div className="relative w-full max-w-[980px]">
-                {/* Fades to hint scroll but keep it hidden */}
                 <div className="pointer-events-none absolute left-0 top-0 h-full w-6 rounded-l-[22px] bg-gradient-to-r from-white/80 to-transparent" />
                 <div className="pointer-events-none absolute right-0 top-0 h-full w-6 rounded-r-[22px] bg-gradient-to-l from-white/80 to-transparent" />
 
-                <div
-                  className="relative bg-white/90 backdrop-blur rounded-[22px] p-1 shadow-sm ring-1 ring-black/5
-                             flex items-center gap-1 overflow-x-auto no-scrollbar"
-                >
+                <div className="relative bg-white/90 backdrop-blur rounded-[22px] p-1 shadow-sm ring-1 ring-black/5 flex items-center gap-1 overflow-x-auto no-scrollbar">
                   {links.map((link) => {
                     const active = isActive(link.href);
                     return (
-                      <Link
-                        key={link.href}
-                        href={link.href}
-                        aria-current={active ? "page" : undefined}
-                        className="relative block"
-                      >
+                      <Link key={link.href} href={link.href} aria-current={active ? "page" : undefined} className="relative block">
                         <span
                           className={[
                             "flex items-center gap-2 px-4 py-2 rounded-[18px] text-sm whitespace-nowrap",
                             "transition-[transform,box-shadow] duration-200",
-                            active
-                              ? "text-white"
-                              : "text-gray-700 hover:text-gray-900",
+                            active ? "text-white" : "text-gray-700 hover:text-gray-900",
                           ].join(" ")}
                         >
-                          {/* animated active BG */}
                           {active && (
                             <motion.span
                               layoutId="adminTabHighlight"
@@ -195,12 +184,8 @@ export default function Header({
                               aria-hidden="true"
                             />
                           )}
-                          <span className="relative z-[1] text-base opacity-90">
-                            {link.icon}
-                          </span>
-                          <span className="relative z-[1] truncate font-medium">
-                            {link.label}
-                          </span>
+                          <span className="relative z-[1] text-base opacity-90">{link.icon}</span>
+                          <span className="relative z-[1] truncate font-medium">{link.label}</span>
                         </span>
                       </Link>
                     );
@@ -208,7 +193,6 @@ export default function Header({
                 </div>
               </div>
             ) : (
-              // ===== Technician (unchanged) =====
               <div className="flex items-center justify-center flex-1 min-w-0 overflow-x-auto no-scrollbar md:flex-wrap gap-1.5 text-sm text-white font-medium">
                 {links.map((link) => (
                   <div key={link.href} className="relative group shrink-0">
@@ -232,7 +216,7 @@ export default function Header({
             )}
           </nav>
 
-          {/* Right: Actions (Profile only) */}
+          {/* RIGHT SIDE PROFILE */}
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="relative">
               <button
@@ -243,13 +227,9 @@ export default function Header({
                 className="flex items-center gap-2 bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-sm text-white font-semibold shadow-inner transition-all focus:outline-none focus:ring-2 focus:ring-white/60"
               >
                 <div className="h-7 w-7 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center">
-                  <span className="text-[11px] font-bold">
-                    {initials(user?.name)}
-                  </span>
+                  <span className="text-[11px] font-bold">{initials(user?.name)}</span>
                 </div>
-                <span className="hidden sm:block max-w-[140px] truncate">
-                  {user?.name || "Profile"}
-                </span>
+                <span className="hidden sm:block max-w-[140px] truncate">{user?.name || "Profile"}</span>
                 <FiUser aria-hidden="true" className="opacity-80" />
               </button>
 
@@ -264,15 +244,9 @@ export default function Header({
                     role="menu"
                   >
                     <div className="px-4 py-3 border-b border-gray-100">
-                      <p className="text-xs uppercase tracking-wider text-gray-500">
-                        Signed in as
-                      </p>
-                      <p className="text-sm font-semibold text-gray-900 truncate">
-                        {user?.name || "User"}
-                      </p>
-                      <p className="text-[11px] text-gray-500">
-                        Role: {user?.role || "guest"}
-                      </p>
+                      <p className="text-xs uppercase tracking-wider text-gray-500">Signed in as</p>
+                      <p className="text-sm font-semibold text-gray-900 truncate">{user?.name || "User"}</p>
+                      <p className="text-[11px] text-gray-500">Role: {user?.role || "guest"}</p>
                     </div>
                     <Link
                       href={user?.role === "admin" ? "/admin" : "/tech/profile"}
@@ -297,7 +271,7 @@ export default function Header({
         </div>
       </header>
 
-      {/* MOBILE OVERLAY + DRAWER OUTSIDE HEADER */}
+      {/* MOBILE MENU */}
       <AnimatePresence>
         {menuOpen && (
           <>
@@ -310,6 +284,7 @@ export default function Header({
               transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
               onClick={() => setMenuOpen(false)}
             />
+
             <motion.nav
               key="drawer"
               aria-label="Mobile"
@@ -356,9 +331,7 @@ export default function Header({
                     ].join(" ")}
                     onClick={() => setMenuOpen(false)}
                   >
-                    <span className="text-lg" aria-hidden="true">
-                      {link.icon}
-                    </span>
+                    <span className="text-lg" aria-hidden="true">{link.icon}</span>
                     <span>{link.label}</span>
                   </Link>
                 ))}
@@ -378,7 +351,6 @@ export default function Header({
         )}
       </AnimatePresence>
 
-      {/* Hide scrollbars globally for .no-scrollbar but keep scrolling */}
       <style jsx global>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

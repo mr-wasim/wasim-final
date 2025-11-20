@@ -52,18 +52,34 @@ function CallCardSkeleton() {
   );
 }
 
+/**
+ * Utility: safeExtract
+ * Tries many possible keys for a field (server might send different names)
+ */
+function safeExtract(obj, keys) {
+  for (const k of keys) {
+    if (obj == null) continue;
+    if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined && obj[k] !== null) {
+      return obj[k];
+    }
+  }
+  return "";
+}
+
 export default function Calls() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("All Calls");
 
-  const [items, setItems] = useState([]);           // current page items only
-  const [page, setPage] = useState(1);              // 1-indexed
-  const [total, setTotal] = useState(0);            // server total (fallback handled)
-  const [hasMore, setHasMore] = useState(false);    // server hint for next page
+  const [items, setItems] = useState([]); // current page items only
+  const [page, setPage] = useState(1); // 1-indexed
+  const [total, setTotal] = useState(0); // server total (fallback handled)
+  const [hasMore, setHasMore] = useState(false); // server hint for next page
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [updatingId, setUpdatingId] = useState(null);
+
+  const [selectedCall, setSelectedCall] = useState(null); // for modal
 
   const loadingRef = useRef(false);
   const abortRef = useRef(null);
@@ -176,16 +192,37 @@ export default function Calls() {
 
         const d = await r.json();
         if (d?.success && Array.isArray(d.items)) {
-          const mapped = d.items.map((i) => ({
-            _id: i._id,
-            clientName: i.clientName || i.name || "",
-            phone: i.phone || "",
-            address: i.address || "",
-            type: i.type || i.service || "",
-            price: i.price || i.amount || 0,
-            status: i.status || "Pending",
-            createdAt: i.createdAt || i.created_at || "",
-          }));
+          const mapped = d.items.map((i) => {
+            // robust mapping with fallbacks
+            const clientName = safeExtract(i, ["clientName", "name", "client_name", "customerName"]) || "";
+            const phone = safeExtract(i, ["phone", "mobile", "contact"]) || "";
+            const address = safeExtract(i, ["address", "addr", "location"]) || "";
+            const type = safeExtract(i, ["type", "service", "category"]) || "";
+            const price = safeExtract(i, ["price", "amount", "cost"]) || 0;
+            const status = safeExtract(i, ["status"]) || "Pending";
+            const createdAt = safeExtract(i, ["createdAt", "created_at", "created"]) || "";
+
+            // timeZone field fallbacks
+            const timeZone = safeExtract(i, ["timeZone", "time_zone", "timezone", "preferredTime", "preferred_time"]) || "";
+
+            // notes field fallbacks
+            const notes = safeExtract(i, ["notes", "note", "remarks", "remark", "description", "details"]) || "";
+
+            return {
+              _id: i._id || i.id || (i._id && typeof i._id === "string" ? i._id : ""),
+              clientName,
+              phone,
+              address,
+              type,
+              price,
+              status,
+              createdAt,
+              timeZone,
+              notes,
+              // keep raw object for modal if needed
+              __raw: i,
+            };
+          });
 
           const filtered = filterItems(mapped);
 
@@ -239,25 +276,29 @@ export default function Calls() {
       await load({ reset: true });
 
       if (db) {
-        const q = fsQuery(
-          collection(db, "notifications"),
-          where("to", "==", u.username || u.email || u._id),
-          orderBy("createdAt", "desc")
-        );
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === "added") {
-              const data = change.doc.data();
-              toast.custom(
-                <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg">
-                  🔔 {data.message}
-                </div>,
-                { duration: 4000 }
-              );
-            }
+        try {
+          const q = fsQuery(
+            collection(db, "notifications"),
+            where("to", "==", u.username || u.email || u._id),
+            orderBy("createdAt", "desc")
+          );
+          const unsubscribe = onSnapshot(q, (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === "added") {
+                const data = change.doc.data();
+                toast.custom(
+                  <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg">
+                    🔔 {data.message}
+                  </div>,
+                  { duration: 4000 }
+                );
+              }
+            });
           });
-        });
-        return () => unsubscribe();
+          return () => unsubscribe();
+        } catch (e) {
+          console.warn("Firestore realtime error:", e);
+        }
       } else {
         console.warn("⚠️ Firestore not initialized.");
       }
@@ -340,6 +381,15 @@ export default function Calls() {
     if (total && total > 0) return Math.max(1, Math.ceil(total / PAGE_SIZE));
     return hasMore ? page + 1 : page;
   }, [total, page, hasMore]);
+
+  // Modal close handler with escape key
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") setSelectedCall(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="pb-20 min-h-screen bg-[radial-gradient(1200px_500px_at_50%_-10%,#e6f0ff,transparent),linear-gradient(to_bottom,#f8fbff,#ffffff)]">
@@ -484,7 +534,7 @@ export default function Calls() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">
-                          {call.clientName}
+                          {call.clientName || "—"}
                         </h3>
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide ${
@@ -497,27 +547,97 @@ export default function Calls() {
                         </span>
                       </div>
 
-                      <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-[13px] text-slate-700">
-                        <div className="flex items-center gap-2">
-                          <FiPhone className="opacity-70" />
-                          <span className="truncate">{call.phone}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <FiMapPin className="opacity-70" />
-                          <span className="truncate">{call.address}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold">Type:</span>
-                          <span className="truncate">{call.type}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold">Price:</span>₹{call.price}
-                        </div>
-                      </div>
+                      <div className="mt-2 flex flex-col gap-2 text-[13px] text-slate-700">
+                        {/* Vertical single-column info (TRUNCATE in list) */}
 
-                      <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                        <FiClock className="shrink-0" />
-                        Received {timeAgo(call.createdAt)}
+                        {/* Phone */}
+                        <div className="flex items-start gap-3">
+                          <FiPhone className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Phone</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={call.phone || ""}
+                            >
+                              {call.phone || "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Address */}
+                        <div className="flex items-start gap-3">
+                          <FiMapPin className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Address</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={call.address || ""}
+                            >
+                              {call.address || "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Type */}
+                        <div className="flex items-start gap-3">
+                          <FiAlertTriangle className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Type</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={call.type || ""}
+                            >
+                              {call.type || "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Price */}
+                        <div className="flex items-start gap-3">
+                          <FiCheckCircle className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Price</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={String(call.price ?? "")}
+                            >
+                              ₹{call.price ?? 0}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Time Zone */}
+                        <div className="flex items-start gap-3">
+                          <FiClock className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Time Zone</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={call.timeZone || ""}
+                            >
+                              {call.timeZone || "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Notes */}
+                        <div className="flex items-start gap-3">
+                          <FiAlertTriangle className="text-slate-500 mt-1" />
+                          <div className="leading-relaxed">
+                            <div className="text-xs text-slate-500">Notes</div>
+                            <div
+                              className="text-sm font-medium truncate max-w-[240px]"
+                              title={call.notes || ""}
+                            >
+                              {call.notes || "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                          <FiClock className="shrink-0" />
+                          <div>Received {timeAgo(call.createdAt)}</div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -551,41 +671,22 @@ export default function Calls() {
                         Go
                       </button>
 
-                      {tab === "All Calls" ? (
-                        <select
-                          className="px-3 py-2 rounded-xl border bg-white text-sm"
-                          value={call.status}
-                          disabled={updatingId === call._id}
-                          onChange={(e) => updateStatus(call._id, e.target.value)}
-                        >
-                          <option>Pending</option>
-                          <option>Closed</option>
-                        </select>
-                      ) : (
-                        <button
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-60"
-                          disabled={updatingId === call._id}
-                          onClick={() => updateStatus(call._id, "Closed")}
-                        >
-                          {updatingId === call._id ? (
-                            <>
-                              <motion.span
-                                animate={{ rotate: 360 }}
-                                transition={{ repeat: Infinity, duration: 1 }}
-                                className="inline-flex"
-                              >
-                                <FiRefreshCw />
-                              </motion.span>
-                              Updating...
-                            </>
-                          ) : (
-                            <>
-                              <FiCheckCircle />
-                              Close Call
-                            </>
-                          )}
-                        </button>
-                      )}
+                      <button
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50"
+                        onClick={() => setSelectedCall(call)}
+                      >
+                        Show Details
+                      </button>
+
+                      <select
+                        className="px-3 py-2 rounded-xl border bg-white text-sm"
+                        value={call.status}
+                        disabled={updatingId === call._id}
+                        onChange={(e) => updateStatus(call._id, e.target.value)}
+                      >
+                        <option>Pending</option>
+                        <option>Closed</option>
+                      </select>
                     </div>
                   </div>
                 </motion.div>
@@ -634,6 +735,137 @@ export default function Calls() {
       </main>
 
       <BottomNav />
+
+      {/* DETAILS MODAL - Glassmorphism (full details, no truncation) */}
+      {selectedCall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setSelectedCall(null)}
+          />
+          <div className="relative w-full max-w-2xl max-h-[90vh] overflow-auto rounded-2xl mt-[50px] p-6 bg-white backdrop-blur-xl border border-white/30 shadow-xl">
+            <button
+              onClick={() => setSelectedCall(null)}
+              className="absolute right-4 top-4 text-gray-700 hover:text-black"
+              aria-label="Close details"
+            >
+              ✕
+            </button>
+
+            <h2 className="text-2xl font-extrabold mb-3">Call Details</h2>
+
+            <div className="space-y-4 text-slate-800">
+              {/* Client */}
+              <div>
+                <div className="text-xs text-slate-500">Client</div>
+                <div className="text-lg font-semibold break-words whitespace-pre-wrap">{selectedCall.clientName || "—"}</div>
+              </div>
+
+              {/* Phone */}
+              <div className="flex items-start gap-3">
+                <FiPhone className="text-slate-500 mt-1" />
+                <div>
+                  <div className="text-xs text-slate-500">Phone</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.phone || "—"}</div>
+                </div>
+              </div>
+
+              {/* Address */}
+              <div className="flex items-start gap-3">
+                <FiMapPin className="text-slate-500 mt-1" />
+                <div>
+                  <div className="text-xs text-slate-500">Address</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.address || "—"}</div>
+                </div>
+              </div>
+
+              {/* Type & Price */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex items-start gap-3">
+                  <FiAlertTriangle className="text-slate-500 mt-1" />
+                  <div>
+                    <div className="text-xs text-slate-500">Type</div>
+                    <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.type || "—"}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <FiCheckCircle className="text-slate-500 mt-1" />
+                  <div>
+                    <div className="text-xs text-slate-500">Price</div>
+                    <div className="text-sm break-words whitespace-pre-wrap">₹{selectedCall.price ?? 0}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Time Zone */}
+              <div className="flex items-start gap-3">
+                <FiClock className="text-slate-500 mt-1" />
+                <div>
+                  <div className="text-xs text-slate-500">Time Zone</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.timeZone || "—"}</div>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div className="flex items-start gap-3">
+                <FiAlertTriangle className="text-slate-500 mt-1" />
+                <div>
+                  <div className="text-xs text-slate-500">Notes</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.notes || "—"}</div>
+                </div>
+              </div>
+
+             
+
+            {/* Actions */}
+<div className="flex justify-end gap-3 mt-4">
+
+  {/* Call */}
+  <a
+    href={`tel:${selectedCall.phone}`}
+    className="
+      h-11 w-11 flex items-center justify-center 
+      rounded-xl bg-blue-600 text-white shadow 
+      hover:bg-blue-700 active:scale-95 transition
+    "
+    title="Call Client"
+  >
+    <FiPhone className="text-[20px]" />
+  </a>
+
+  {/* Maps */}
+  <button
+    onClick={() => startNavigation(selectedCall.address)}
+    className="
+      h-11 w-11 flex items-center justify-center
+      rounded-xl bg-white border border-slate-200 text-slate-700 
+      hover:bg-slate-50 active:scale-95 transition
+    "
+    title="Open in Maps"
+  >
+    <FiMapPin className="text-[20px]" />
+  </button>
+
+  {/* Close */}
+  <button
+    onClick={() => setSelectedCall(null)}
+    className="
+      h-11 w-11 flex items-center justify-center
+      rounded-xl bg-gray-100 border border-slate-300 text-slate-700 
+      hover:bg-gray-200 active:scale-95 transition
+    "
+    title="Close"
+  >
+    ✕
+  </button>
+
+</div>
+
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes shimmer {
