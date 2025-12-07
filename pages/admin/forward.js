@@ -121,7 +121,7 @@ export default function Forward() {
 
       <main className="max-w-3xl mx-auto p-4 space-y-3">
         <div className="p-4 shadow-md rounded-xl border border-gray-200 bg-white">
-          <div className="font-semibold text-lg mb-3">📞 Ultra Fast Call Forward</div>
+          <div className="font-semibold text-lg mb-3">📞Call Forward</div>
 
           <form onSubmit={submit} className="grid gap-3">
 
@@ -157,7 +157,7 @@ export default function Forward() {
               {loading && (
                 <span className="loader border-2 w-4 h-4 rounded-full border-white border-t-transparent animate-spin"></span>
               )}
-              {loading ? "Forwarding..." : "Forward Instantly ⚡"}
+              {loading ? "Forwarding..." : "Forward"}
             </button>
           </form>
         </div>
