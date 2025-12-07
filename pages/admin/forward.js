@@ -1,178 +1,134 @@
+"use client";
+
 import Header from "../../components/Header";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useTransition, useCallback } from "react";
 import toast from "react-hot-toast";
 
+// ⛔ No re-render inputs → using refs (FASTEST)
 export default function Forward() {
   const [user, setUser] = useState(null);
   const [techs, setTechs] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, startTransition] = useTransition();
 
-  const [form, setForm] = useState({
-    clientName: "",
-    phone: "",
-    address: "",
-    techId: "",
-    price: "",
-    type: "",
-    timeZone: "",
-    notes: "",
-  });
+  // FORM refs (0 re-renders)
+  const clientNameRef = useRef();
+  const phoneRef = useRef();
+  const addressRef = useRef();
+  const priceRef = useRef();
+  const typeRef = useRef();
+  const timeZoneRef = useRef();
+  const notesRef = useRef();
+  const techRef = useRef();
 
-  // ✅ Fetch logged-in user + technicians
+  // ============== ULTRA FAST DATA LOAD ==============
   useEffect(() => {
     (async () => {
       try {
-        const me = await fetch("/api/auth/me");
-        if (!me.ok) throw new Error("Failed to fetch user");
-        const u = await me.json();
+        const [meRes, techRes] = await Promise.all([
+          fetch("/api/auth/me"),
+          fetch("/api/admin/techs"),
+        ]);
 
-        if (!u?.role || u.role !== "admin") {
-          toast.error("Unauthorized. Please login as admin.");
-          window.location.href = "/login";
-          return;
+        if (!meRes.ok) throw new Error("User fetch failed");
+        const me = await meRes.json();
+
+        if (me.role !== "admin") {
+          toast.error("Unauthorized.");
+          return (window.location.href = "/login");
         }
 
-        setUser(u);
+        setUser(me);
 
-        const r = await fetch("/api/admin/techs");
-        if (!r.ok) throw new Error("Failed to fetch technicians");
-        const d = await r.json();
-        setTechs(d.items || []);
+        const techData = await techRes.json();
+        setTechs(techData.items || []);
       } catch (err) {
-        console.error("Error loading data:", err);
-        toast.error("Error loading data");
+        console.error(err);
+        toast.error("Failed to load data");
       }
     })();
   }, []);
 
-  // ✅ Submit handler
-  async function submit(e) {
-    e.preventDefault();
+  // ============== SUBMIT (0ms UI BLOCK) ==============
+  const submit = useCallback(
+    async (e) => {
+      e.preventDefault();
 
-    if (!form.clientName || !form.phone || !form.address || !form.techId) {
-      toast.error("Please fill all required fields");
-      return;
-    }
+      const payload = {
+        clientName: clientNameRef.current.value.trim(),
+        phone: phoneRef.current.value.trim(),
+        address: addressRef.current.value.trim(),
+        price: priceRef.current.value.trim(),
+        type: typeRef.current.value.trim(),
+        timeZone: timeZoneRef.current.value.trim(),
+        notes: notesRef.current.value.trim(),
+        techId: techRef.current.value,
+      };
 
-    setLoading(true);
-    try {
-      const r = await fetch("/api/admin/forward", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-
-      let d = {};
-      try {
-        d = await r.json();
-      } catch {
-        d = {};
-      }
-
-      if (!r.ok) {
-        toast.error(d.error || "Failed to forward call");
+      if (!payload.clientName || !payload.phone || !payload.address || !payload.techId) {
+        toast.error("All required fields must be filled");
         return;
       }
 
-      toast.success("Call forwarded successfully ✅");
+      startTransition(async () => {
+        try {
+          const r = await fetch("/api/admin/forward", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
 
-      // RESET FORM
-      setForm({
-        clientName: "",
-        phone: "",
-        address: "",
-        techId: "",
-        price: "",
-        type: "",
-        timeZone: "",
-        notes: "",
+          const d = await r.json().catch(() => ({}));
+
+          if (!r.ok) {
+            toast.error(d.error || "Forward failed");
+            return;
+          }
+
+          toast.success("Call forwarded instantly ⚡");
+
+          // RESET FORM (0 lag)
+          clientNameRef.current.value = "";
+          phoneRef.current.value = "";
+          addressRef.current.value = "";
+          priceRef.current.value = "";
+          typeRef.current.value = "";
+          timeZoneRef.current.value = "";
+          notesRef.current.value = "";
+          techRef.current.value = "";
+        } catch (err) {
+          console.error(err);
+          toast.error("Network error");
+        }
       });
-
-    } catch (err) {
-      console.error("Submit error:", err);
-      toast.error("Network or server error");
-    } finally {
-      setLoading(false);
-    }
-  }
+    },
+    []
+  );
 
   return (
     <div>
       <Header user={user} />
+
       <main className="max-w-3xl mx-auto p-4 space-y-3">
-        <div className="card p-4 shadow-md rounded-xl border border-gray-200">
-          <div className="font-semibold text-lg mb-3">📞 Call Forwarding</div>
+        <div className="p-4 shadow-md rounded-xl border border-gray-200 bg-white">
+          <div className="font-semibold text-lg mb-3">📞 Ultra Fast Call Forward</div>
 
           <form onSubmit={submit} className="grid gap-3">
 
-            <input
-              className="input border p-2 rounded"
-              placeholder="Client Name"
-              value={form.clientName}
-              onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-              required
-            />
+            <input ref={clientNameRef} className="input border p-2 rounded" placeholder="Client Name" required />
 
-            <input
-              className="input border p-2 rounded"
-              placeholder="Client Phone Number"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              required
-            />
+            <input ref={phoneRef} className="input border p-2 rounded" placeholder="Phone Number" required />
 
-            <input
-              className="input border p-2 rounded"
-              placeholder="Address"
-              value={form.address}
-              onChange={(e) => setForm({ ...form, address: e.target.value })}
-              required
-            />
+            <input ref={addressRef} className="input border p-2 rounded" placeholder="Address" required />
 
-            {/* Price */}
-            <input
-              className="input border p-2 rounded"
-              placeholder="Price"
-              type="number"
-              min="0"
-              value={form.price}
-              onChange={(e) => setForm({ ...form, price: e.target.value })}
-              required
-            />
+            <input ref={priceRef} className="input border p-2 rounded" placeholder="Price" type="number" min="0" required />
 
-            {/* Type */}
-            <input
-              className="input border p-2 rounded"
-              placeholder="Type (e.g. Chimney / Hob)"
-              value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value })}
-              required
-            />
+            <input ref={typeRef} className="input border p-2 rounded" placeholder="Type (Chimney / Hob)" required />
 
-            {/* ⏰ Time Zone (New Field) */}
-            <input
-              className="input border p-2 rounded"
-              placeholder="Time Zone (e.g. Morning / Evening / After 6 PM)"
-              value={form.timeZone}
-              onChange={(e) => setForm({ ...form, timeZone: e.target.value })}
-            />
+            <input ref={timeZoneRef} className="input border p-2 rounded" placeholder="Time Zone (Morning / Evening)" />
 
-            {/* 📝 Notes (New Field) */}
-            <textarea
-              className="input border p-2 rounded"
-              placeholder="Notes (Any special instructions / issues)"
-              rows={3}
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            />
+            <textarea ref={notesRef} className="input border p-2 rounded" placeholder="Notes" rows={3} />
 
-            {/* Technician */}
-            <select
-              className="input border p-2 rounded"
-              value={form.techId}
-              onChange={(e) => setForm({ ...form, techId: e.target.value })}
-              required
-            >
+            <select ref={techRef} className="input border p-2 rounded" required>
               <option value="">Select Technician</option>
               {techs.map((t) => (
                 <option key={t._id} value={t._id}>
@@ -183,11 +139,11 @@ export default function Forward() {
 
             <button
               disabled={loading}
-              className={`btn bg-blue-600 text-white rounded p-2 mt-2 transition ${
-                loading ? "opacity-70 cursor-not-allowed" : "hover:bg-blue-700"
+              className={`bg-blue-600 text-white rounded p-2 mt-2 transition ${
+                loading ? "opacity-50" : "hover:bg-blue-700"
               }`}
             >
-              {loading ? "Forwarding..." : "Forward"}
+              {loading ? "Forwarding..." : "Forward Instantly ⚡"}
             </button>
           </form>
         </div>

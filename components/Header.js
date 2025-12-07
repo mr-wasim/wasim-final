@@ -83,7 +83,9 @@ export default function Header({
         { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall aria-hidden="true" /> },
         { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall aria-hidden="true" /> },
 
-        /* ⭐ REPLACED OLD ENTRY → Added 2 New Working Menus */
+        /* ⭐ NEW MENU ADDED HERE */
+        { href: "/admin/all-calls", label: "All Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+
         { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers aria-hidden="true" /> },
         { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiPhoneCall aria-hidden="true" /> },
 
@@ -119,7 +121,7 @@ export default function Header({
     <>
       <header
         className={[
-          "sticky top-0 z-[90] transition-all duration-200",   // ⚡ animation speed optimized
+          "sticky top-0 z-[90] transition-all duration-200",
           "bg-gradient-to-r from-[#1e3a8a] via-[#1d4ed8] to-[#1e40af]",
           "backdrop-blur-xl bg-opacity-90",
           scrolled ? "shadow-2xl shadow-blue-900/20" : "shadow-lg shadow-blue-900/10",
@@ -145,7 +147,7 @@ export default function Header({
                 <motion.div
                   layout
                   className="h-9 w-9 rounded-xl bg-white/15 ring-1 ring-white/20 grid place-items-center shadow-inner"
-                  whileHover={shouldReduceMotion ? {} : { scale: 1.05 }}     // ⚡ fast hover
+                  whileHover={shouldReduceMotion ? {} : { scale: 1.05 }}
                   transition={{ duration: 0.12 }}
                 >
                   <span className="text-white font-black">CS</span>
@@ -154,7 +156,7 @@ export default function Header({
                   Chimney <span className="text-blue-100">Solutions</span>
                 </h1>
               </div>
-              <div className="h-0.5 w-0 group-hover:w-full transition-all duration-300 bg-white/30 rounded-full" /> {/* ⚡ faster */}
+              <div className="h-0.5 w-0 group-hover:w-full transition-all duration-300 bg-white/30 rounded-full" />
             </Link>
           </div>
 
@@ -173,14 +175,14 @@ export default function Header({
                         <span
                           className={[
                             "flex items-center gap-2 px-4 py-2 rounded-[18px] text-sm whitespace-nowrap",
-                            "transition duration-150",   // ⚡ faster
+                            "transition duration-150",
                             active ? "text-white" : "text-gray-700 hover:text-gray-900",
                           ].join(" ")}
                         >
                           {active && (
                             <motion.span
                               layoutId="adminTabHighlight"
-                              transition={{ duration: 0.15 }}   // ⚡ faster
+                              transition={{ duration: 0.15 }}
                               className="absolute inset-0 rounded-[18px] bg-gradient-to-r from-indigo-600 to-blue-600 shadow-md"
                               aria-hidden="true"
                             />
@@ -215,7 +217,7 @@ export default function Header({
             )}
           </nav>
 
-          {/* RIGHT SIDE PROFILE */}
+          {/* RIGHT PROFILE */}
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="relative">
               <button
@@ -238,7 +240,7 @@ export default function Header({
                     initial={{ opacity: 0, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.12 }}  // ⚡ instant dropdown
+                    transition={{ duration: 0.12 }}
                     className="absolute right-0 mt-3 w-56 bg-white rounded-2xl shadow-2xl overflow-hidden z-[120] ring-1 ring-black/5"
                     role="menu"
                   >
@@ -280,7 +282,7 @@ export default function Header({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}   // ⚡ faster
+              transition={{ duration: 0.18 }}
               onClick={() => setMenuOpen(false)}
             />
 
@@ -290,9 +292,7 @@ export default function Header({
               initial={{ x: "-100%" }}
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
-              transition={{
-                duration: 0.2,   // ⚡ fast slide
-              }}
+              transition={{ duration: 0.2 }}
               className="fixed top-0 left-0 w-80 max-w-[85vw] h-full bg-gradient-to-b from-[#1d4ed8] to-[#1e40af] text-white z-[110] p-6 flex flex-col shadow-2xl md:hidden overflow-y-auto"
             >
               <div className="flex items-center justify-between mb-4">

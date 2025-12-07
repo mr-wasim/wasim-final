@@ -1,10 +1,17 @@
 // pages/admin/all-customers.js
 "use client";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import { useRouter } from "next/router";
 import Header from "../../components/Header";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
+
 import {
   FiSearch,
   FiFilter,
@@ -19,10 +26,11 @@ import {
 
 const PAGE_SIZE = 20;
 
+// FORMAT DATE
 function formatDateTime(value) {
   if (!value) return "—";
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (isNaN(d.getTime())) return "—";
   return d.toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
@@ -32,58 +40,64 @@ function formatDateTime(value) {
   });
 }
 
-function escapeCSV(value) {
-  if (value == null) return "";
-  const str = String(value);
-  if (/[",\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
+// SAFE CSV
+function escapeCSV(v) {
+  if (v == null) return "";
+  const s = String(v);
+  if (/[,\"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }
 
 export default function AllCustomersPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
 
+  // FILTERS
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // DATA
   const [items, setItems] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
 
+  const [hasMore, setHasMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
 
-  // auth check (admin)
+  // ⭐ Infinite Scroll Ref
+  const bottomRef = useRef(null);
+
+  // -------------------------
+  // AUTH CHECK
+  // -------------------------
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/auth/me");
-        if (!res.ok) {
-          router.push("/login");
-          return;
-        }
-        const me = await res.json();
-        if (me.role !== "admin") {
-          router.push("/login");
-          return;
-        }
+        const r = await fetch("/api/auth/me");
+        const me = await r.json();
+        if (!r.ok || me.role !== "admin") return router.push("/login");
         setUser(me);
       } catch {
         router.push("/login");
       }
     })();
-  }, [router]);
+  }, []);
 
+  // -------------------------
+  // LOAD DATA (with pagination)
+  // -------------------------
   const load = useCallback(
     async ({ resetPage = false, showToast = false } = {}) => {
       if (!user) return;
+
       try {
         setIsFetching(true);
-        if (resetPage) setPage(1);
+
+        if (resetPage) {
+          setPage(1);
+        }
 
         const currentPage = resetPage ? 1 : page;
 
@@ -96,23 +110,29 @@ export default function AllCustomersPage() {
         if (dateFrom) params.set("from", dateFrom);
         if (dateTo) params.set("to", dateTo);
 
-        const res = await fetch(`/api/admin/all-customers?${params.toString()}`, {
-          cache: "no-store",
-        });
-
+        const res = await fetch(
+          `/api/admin/all-customers?${params.toString()}`,
+          { cache: "no-store" }
+        );
         const data = await res.json();
-        if (!res.ok || !data?.success) {
-          throw new Error(data?.error || "Failed to load customers");
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Failed loading data");
         }
 
-        setItems(data.items || []);
+        // ⭐ Infinite scroll: Append data instead of replace
+        if (resetPage || currentPage === 1) {
+          setItems(data.items);
+        } else {
+          setItems((prev) => [...prev, ...data.items]);
+        }
+
         setTotal(data.total || 0);
-        setHasMore(data.hasMore ?? (data.items?.length === PAGE_SIZE));
+        setHasMore(data.hasMore);
 
         if (showToast) toast.success("Data refreshed");
       } catch (err) {
-        console.error("All customers load error:", err);
-        toast.error(err.message || "Failed to load data");
+        toast.error(err.message || "Error loading");
       } finally {
         setInitialLoading(false);
         setIsFetching(false);
@@ -121,17 +141,19 @@ export default function AllCustomersPage() {
     [user, page, search, dateFrom, dateTo]
   );
 
+  // FIRST LOAD + PAGE CHANGE
   useEffect(() => {
     if (!user) return;
-    load({ resetPage: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    load({ resetPage: page === 1 });
   }, [user, page]);
 
+  // TOTAL PAGES
   const totalPages = useMemo(() => {
-    if (!total) return page;
-    return Math.max(1, Math.ceil(total / PAGE_SIZE));
-  }, [total, page]);
+    if (!total) return 1;
+    return Math.ceil(total / PAGE_SIZE);
+  }, [total]);
 
+  // FILTER EVENTS
   const handleApplyFilters = () => {
     setPage(1);
     load({ resetPage: true, showToast: true });
@@ -145,372 +167,321 @@ export default function AllCustomersPage() {
     load({ resetPage: true, showToast: true });
   };
 
-  const handleExportCSV = () => {
-    if (!items.length) {
-      toast.error("No data to export");
-      return;
-    }
+  // ⭐ EXPORT FULL DATABASE CSV (no limit)
+  const handleExportCSV = async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set("pageSize", "all");
+      if (search.trim()) params.set("search", search.trim());
+      if (dateFrom) params.set("from", dateFrom);
+      if (dateTo) params.set("to", dateTo);
 
-    const headers = [
-      "Customer Name",
-      "Phone",
-      "Address",
-      "Service Type",
-      "Price",
-      "Service Date",
-      "Technician Name",
-    ];
+      const r = await fetch(`/api/admin/all-customers?${params}`, {
+        cache: "no-store",
+      });
+      const data = await r.json();
 
-    const rows = items.map((c) => {
-      const techLabel =
-        c.techName ||
-        c.technicianName ||
-        c.techUsername ||
-        "Unknown technician";
-      return [
+      if (!data.success) return toast.error("Export failed");
+
+      const all = data.items;
+      if (!all.length) return toast.error("No data");
+
+      const headers = [
+        "Customer Name",
+        "Phone",
+        "Address",
+        "Service Type",
+        "Price",
+        "Date",
+        "Technician",
+      ];
+
+      const rows = all.map((c) => [
         c.clientName || c.customerName || "—",
         c.phone || "",
         c.address || "",
         c.type || c.serviceType || "",
         c.price ?? 0,
         formatDateTime(c.createdAt || c.serviceDate),
-        techLabel,
+        c.techName || c.technicianName || c.techUsername || "Unknown",
+      ]);
+
+      const csvLines = [
+        headers.join(","),
+        ...rows.map((r) => r.map(escapeCSV).join(",")),
       ];
-    });
 
-    const csvLines = [
-      headers.map(escapeCSV).join(","),
-      ...rows.map((row) => row.map(escapeCSV).join(",")),
-    ];
+      const blob = new Blob([csvLines.join("\n")], {
+        type: "text/csv",
+      });
 
-    const blob = new Blob([csvLines.join("\n")], {
-      type: "text/csv;charset=utf-8;",
-    });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const fname = new Date().toISOString().split("T")[0];
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const today = new Date().toISOString().split("T")[0];
-    a.href = url;
-    a.download = `chimney-all-customers-${today}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      a.href = url;
+      a.download = `customers-${fname}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
 
-    toast.success("Exported CSV (Excel compatible)");
+      URL.revokeObjectURL(url);
+
+      toast.success(`Exported ${all.length} records`);
+    } catch (err) {
+      toast.error("Export failed");
+    }
   };
+
+  // ⭐ INFINITE SCROLL OBSERVER
+  useEffect(() => {
+    if (!bottomRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0];
+        if (e.isIntersecting && hasMore && !isFetching) {
+          setPage((p) => p + 1);
+        }
+      },
+      { threshold: 1 }
+    );
+
+    observer.observe(bottomRef.current);
+    return () => observer.disconnect();
+  }, [bottomRef, hasMore, isFetching]);
 
   const isEmpty = !initialLoading && items.length === 0;
 
+  // ----------------------------------------------------------
+  // UI STARTS
+  // ----------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50">
       <Header user={user} />
 
       <main className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
-        {/* Title + actions */}
+        {/* HEADER */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center shadow-md">
-              <FiUsers className="text-xl" />
+              <FiUsers />
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
                 All Customers
               </h1>
               <p className="text-xs sm:text-sm text-slate-500">
-                All forwarded calls and customer records across all technicians.
+                All forwarded calls and customer records.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2">
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm active:scale-95 transition"
+              className="px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-emerald-600 text-white shadow-sm"
             >
-              <FiDownload />
-              Export (Excel / CSV)
+              <FiDownload className="inline mr-1" /> Export CSV
             </button>
+
             <button
-              onClick={() => load({ resetPage: false, showToast: true })}
+              onClick={() => load({ resetPage: true, showToast: true })}
               disabled={isFetching}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 active:scale-95 transition"
+              className="px-3 py-2 rounded-xl bg-white border text-sm text-slate-700"
             >
               <motion.span
-                animate={isFetching ? { rotate: 360 } : { rotate: 0 }}
+                animate={isFetching ? { rotate: 360 } : {}}
                 transition={{
-                  repeat: isFetching ? Infinity : 0,
-                  duration: 0.8,
+                  repeat: Infinity,
+                  duration: 0.7,
                   ease: "linear",
                 }}
               >
                 <FiRefreshCw />
-              </motion.span>
+              </motion.span>{" "}
               Refresh
             </button>
           </div>
         </div>
 
-        {/* Filters */}
-        <section className="rounded-2xl bg-white border border-slate-200/70 shadow-sm p-3 sm:p-4 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide">
-            <FiFilter className="text-slate-500" />
-            Filters
+        {/* FILTER BAR */}
+        <section className="rounded-2xl bg-white border shadow-sm p-3 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-600">
+            <FiFilter /> Filters
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Search */}
-            <div className="col-span-1 sm:col-span-1">
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                Search (name / phone / address)
-              </label>
+            {/* SEARCH */}
+            <div>
+              <label className="block text-[11px] mb-1">Search</label>
               <div className="relative">
-                <span className="absolute left-2 top-2.5 text-slate-400 text-sm">
-                  <FiSearch />
-                </span>
+                <FiSearch className="absolute left-2 top-2.5 text-slate-400" />
                 <input
-                  type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="eg. Rahul, 98765..."
-                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-slate-50/60"
+                  className="w-full pl-8 py-2 border rounded-xl"
+                  placeholder="name / phone / address"
                 />
               </div>
             </div>
 
-            {/* Date from */}
+            {/* FROM */}
             <div>
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                From date
-              </label>
+              <label className="block text-[11px] mb-1">From date</label>
               <div className="relative">
-                <span className="absolute left-2 top-2.5 text-slate-400 text-sm">
-                  <FiCalendar />
-                </span>
+                <FiCalendar className="absolute left-2 top-2.5 text-slate-400" />
                 <input
                   type="date"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-slate-50/60"
+                  className="w-full pl-8 py-2 border rounded-xl"
                 />
               </div>
             </div>
 
-            {/* Date to */}
+            {/* TO */}
             <div>
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                To date
-              </label>
+              <label className="block text-[11px] mb-1">To date</label>
               <div className="relative">
-                <span className="absolute left-2 top-2.5 text-slate-400 text-sm">
-                  <FiCalendar />
-                </span>
+                <FiCalendar className="absolute left-2 top-2.5 text-slate-400" />
                 <input
                   type="date"
                   value={dateTo}
                   onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-slate-50/60"
+                  className="w-full pl-8 py-2 border rounded-xl"
                 />
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 justify-end pt-1">
+          <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={handleResetFilters}
-              className="px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-95 transition"
+              className="px-3 py-1.5 rounded-xl bg-slate-200"
             >
               Reset
             </button>
             <button
               onClick={handleApplyFilters}
-              className="px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition"
+              className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white"
             >
               Apply Filters
             </button>
           </div>
         </section>
 
-        {/* Meta info */}
-        <div className="text-xs sm:text-sm text-slate-600 flex flex-wrap items-center gap-2">
-          <span>
-            Page{" "}
-            <span className="font-semibold">
-              {page}
-            </span>{" "}
-            of{" "}
-            <span className="font-semibold">
-              {totalPages}
-            </span>
-          </span>
-          <span className="text-slate-400">•</span>
-          <span>
-            Showing <span className="font-semibold">{items.length}</span> records on this page
-          </span>
-          {typeof total === "number" && total > 0 && (
-            <>
-              <span className="text-slate-400">•</span>
-              <span>
-                Total{" "}
-                <span className="font-semibold">{total}</span>{" "}
-                records
-              </span>
-            </>
-          )}
+        {/* META BAR */}
+        <div className="text-xs text-slate-600 flex gap-2">
+          Page {page} / {totalPages} • Showing {items.length} • Total {total}
         </div>
 
-        {/* Table / cards */}
-        <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm overflow-hidden">
-          <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.4fr] gap-3 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-200">
+        {/* TABLE */}
+        <section className="rounded-2xl bg-white border shadow-sm overflow-hidden">
+          <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.4fr] px-4 py-2 bg-slate-50 border-b text-[11px] font-semibold">
             <span>Customer</span>
             <span>Phone</span>
             <span>Address</span>
             <span>Service</span>
             <span>Price</span>
-            <span>Service Date / Technician</span>
+            <span>Date / Tech</span>
           </div>
 
+          {/* LOADING SKELETON */}
           {initialLoading && (
-            <div className="p-4 space-y-3">
+            <div className="p-4">
               {Array.from({ length: 4 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-16 rounded-xl bg-slate-100/70 animate-pulse"
-                />
+                <div key={i} className="h-16 bg-slate-100 animate-pulse mb-3" />
               ))}
             </div>
           )}
 
-          {isEmpty && (
-            <div className="p-8 text-center text-slate-500 text-sm">
-              No customers found for selected filters.
+          {/* EMPTY */}
+          {!initialLoading && isEmpty && (
+            <div className="p-8 text-center text-slate-500">
+              No customers found.
             </div>
           )}
 
+          {/* LIST */}
           {!initialLoading && !isEmpty && (
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y">
               {items.map((c) => {
-                const techLabel =
+                const tech =
                   c.techName ||
                   c.technicianName ||
                   c.techUsername ||
-                  "Unknown technician";
+                  "Unknown";
 
                 return (
                   <div
                     key={c._id}
-                    className="px-3 sm:px-4 py-3 sm:py-3.5 hover:bg-slate-50/60 transition"
+                    className="px-4 py-3 hover:bg-slate-50 transition"
                   >
-                    {/* desktop row */}
-                    <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.4fr] gap-3 items-start text-sm text-slate-800">
-                      {/* customer */}
-                      <div className="flex items-start gap-2">
-                        <div className="h-9 w-9 rounded-xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
-                          {(c.clientName || c.customerName || "?")
-                            .toString()
-                            .trim()
-                            .charAt(0)
-                            .toUpperCase()}
+                    {/* DESKTOP */}
+                    <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.4fr] gap-3">
+                      <div className="flex gap-2">
+                        <div className="h-9 w-9 bg-indigo-600 rounded-xl text-white grid place-items-center">
+                          {(c.clientName || "?")[0]}
                         </div>
                         <div>
-                          <div className="font-semibold">
-                            {c.clientName || c.customerName || "—"}
-                          </div>
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <FiUsers className="text-[10px]" />
-                            {techLabel}
+                          <div className="font-semibold">{c.clientName}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {tech}
                           </div>
                         </div>
                       </div>
 
-                      {/* phone */}
-                      <div className="flex items-center gap-1 text-sm">
+                      <div className="flex items-center gap-1">
                         <FiPhone className="text-slate-400" />
-                        <span>{c.phone || "—"}</span>
+                        {c.phone}
                       </div>
 
-                      {/* address */}
-                      <div className="flex items-start gap-1 text-xs sm:text-sm text-slate-700">
-                        <FiMapPin className="mt-0.5 text-slate-400 shrink-0" />
-                        <span className="line-clamp-2">
-                          {c.address || "—"}
-                        </span>
+                      <div className="flex items-start gap-1 text-sm">
+                        <FiMapPin className="text-slate-400 mt-0.5" />
+                        {c.address}
                       </div>
 
-                      {/* service type */}
-                      <div className="flex items-center gap-1 text-xs sm:text-sm">
+                      <div className="flex items-center gap-1">
                         <FiAlertTriangle className="text-slate-400" />
-                        <span>{c.type || c.serviceType || "—"}</span>
+                        {c.type}
                       </div>
 
-                      {/* price */}
-                      <div className="font-semibold text-sm text-emerald-700">
-                        ₹{c.price ?? 0}
+                      <div className="font-semibold text-emerald-700">
+                        ₹{c.price}
                       </div>
 
-                      {/* date + tech */}
-                      <div className="flex flex-col gap-1 text-xs sm:text-sm">
-                        <div className="flex items-center gap-1 text-slate-600">
-                          <FiCalendar className="text-slate-400" />
-                          <span>{formatDateTime(c.createdAt || c.serviceDate)}</span>
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          Technician:{" "}
-                          <span className="font-semibold">
-                            {techLabel}
-                          </span>
-                        </div>
+                      <div className="text-xs">
+                        <FiCalendar className="inline mr-1 text-slate-400" />
+                        {formatDateTime(c.createdAt)}
                       </div>
                     </div>
 
-                    {/* mobile layout */}
-                    <div className="md:hidden space-y-1.5 text-sm text-slate-800">
+                    {/* MOBILE */}
+                    <div className="md:hidden space-y-1">
                       <div className="flex items-center gap-2">
-                        <div className="h-9 w-9 rounded-xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
-                          {(c.clientName || c.customerName || "?")
-                            .toString()
-                            .trim()
-                            .charAt(0)
-                            .toUpperCase()}
+                        <div className="h-8 w-8 bg-indigo-600 rounded-xl text-white grid place-items-center">
+                          {(c.clientName || "?")[0]}
                         </div>
                         <div>
-                          <div className="font-semibold">
-                            {c.clientName || c.customerName || "—"}
-                          </div>
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <FiUsers className="text-[10px]" />
-                            {techLabel}
-                          </div>
+                          <div className="font-semibold">{c.clientName}</div>
+                          <div className="text-[11px] text-slate-500">{tech}</div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 text-xs text-slate-700">
-                        <FiPhone className="text-slate-400" />
-                        <span>{c.phone || "—"}</span>
+                      <div className="text-sm">
+                        <FiPhone className="inline mr-1" />
+                        {c.phone}
                       </div>
 
-                      <div className="flex items-start gap-1 text-xs text-slate-700">
-                        <FiMapPin className="text-slate-400 mt-0.5" />
-                        <span className="line-clamp-2">
-                          {c.address || "—"}
-                        </span>
+                      <div className="text-sm">
+                        <FiMapPin className="inline mr-1" />
+                        {c.address}
                       </div>
 
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1 text-slate-700">
-                          <FiAlertTriangle className="text-slate-400" />
-                          <span>{c.type || c.serviceType || "—"}</span>
-                        </div>
-                        <div className="font-semibold text-emerald-700 text-sm">
-                          ₹{c.price ?? 0}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <div className="flex items-center gap-1">
-                          <FiCalendar className="text-slate-400" />
-                          <span>{formatDateTime(c.createdAt || c.serviceDate)}</span>
-                        </div>
+                      <div className="text-xs text-slate-500">
+                        <FiCalendar className="inline mr-1" />
+                        {formatDateTime(c.createdAt)}
                       </div>
                     </div>
                   </div>
@@ -518,26 +489,39 @@ export default function AllCustomersPage() {
               })}
             </div>
           )}
+
+          {/* ⭐ INFINITE SCROLL LOADER */}
+          <div
+            ref={bottomRef}
+            className="py-6 text-center text-xs text-slate-500"
+          >
+            {isFetching
+              ? "Loading more..."
+              : hasMore
+              ? "Scroll to load more..."
+              : "All records loaded"}
+          </div>
         </section>
 
-        {/* Pagination */}
+        {/* ORIGINAL PAGINATION BUTTONS (KEEP VISIBLE FOR SAFETY) */}
         {!initialLoading && (
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between mt-4">
             <button
               disabled={page <= 1 || isFetching}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 active:scale-95 transition"
+              className="px-3 py-2 rounded-xl border text-sm bg-white"
             >
               ← Prev
             </button>
-            <div className="text-xs sm:text-sm text-slate-600">
-              Page <span className="font-semibold">{page}</span> /{" "}
-              <span className="font-semibold">{totalPages}</span>
-            </div>
+
+            <span className="text-sm text-slate-600">
+              {page} / {totalPages}
+            </span>
+
             <button
-              disabled={(!hasMore && page >= totalPages) || isFetching}
+              disabled={!hasMore || isFetching}
               onClick={() => setPage((p) => p + 1)}
-              className="px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 active:scale-95 transition"
+              className="px-3 py-2 rounded-xl border text-sm bg-white"
             >
               Next →
             </button>
