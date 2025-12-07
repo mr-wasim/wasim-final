@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import Header from "../../components/Header";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function Payments() {
   const [user, setUser] = useState(null);
+
   const [techs, setTechs] = useState([]);
   const [techId, setTechId] = useState("");
 
@@ -22,21 +23,57 @@ export default function Payments() {
 
   const [viewItem, setViewItem] = useState(null);
 
-  // Load Admin + Tech List
+  // ---------------- HELPERS ----------------
+  const formatDateTime = (d) => new Date(d).toLocaleString();
+  const formatDate = (d) =>
+    d ? new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "-";
+
+  const rangeLabel = useMemo(() => {
+    switch (range) {
+      case "today":
+        return "Today";
+      case "7":
+        return "Last 7 Days";
+      case "30":
+        return "Last 30 Days";
+      case "month":
+        return "This Month";
+      case "lastmonth":
+        return "Last Month";
+      case "year":
+        return "This Year";
+      case "all":
+        return "All Time";
+      case "custom":
+        return `Custom${from ? ` from ${formatDate(from)}` : ""}${to ? ` to ${formatDate(to)}` : ""}`;
+      default:
+        return "Filter";
+    }
+  }, [range, from, to]);
+
+  // ---------------- AUTH + TECH LIST ----------------
   useEffect(() => {
     (async () => {
-      const me = await fetch("/api/auth/me");
-      const u = await me.json();
-      if (u.role !== "admin") return (window.location.href = "/login");
-      setUser(u);
+      try {
+        const me = await fetch("/api/auth/me");
+        const u = await me.json();
+        if (!u || u.role !== "admin") {
+          window.location.href = "/login";
+          return;
+        }
+        setUser(u);
 
-      const tr = await fetch("/api/admin/techs");
-      const td = await tr.json();
-      setTechs(td.items || []);
+        const tr = await fetch("/api/admin/techs");
+        const td = await tr.json();
+        setTechs(td.items || []);
+      } catch (err) {
+        console.error(err);
+        toast.error("Auth failed");
+      }
     })();
   }, []);
 
-  // Load payment data
+  // ---------------- LOAD PAYMENT DATA ----------------
   async function load() {
     try {
       if (abortRef.current) abortRef.current.abort();
@@ -52,34 +89,39 @@ export default function Payments() {
       setItems(d.items || []);
       setSum(d.sum || { online: 0, cash: 0, total: 0 });
     } catch (err) {
-      if (err.name !== "AbortError") toast.error("Failed to load data");
+      if (err.name !== "AbortError") {
+        console.error(err);
+        toast.error("Failed to load payments");
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  // Auto load when admin detected
+  // Auto load when admin ready
   useEffect(() => {
     if (user) load();
   }, [user]);
 
-  // Export CSV
+  // ---------------- CSV EXPORT ----------------
   async function exportCSV() {
-    const qs = new URLSearchParams({ techId, range, from, to, csv: "1" });
-    const r = await fetch("/api/admin/payments?" + qs.toString());
-    const d = await r.json();
+    try {
+      const qs = new URLSearchParams({ techId, range, from, to, csv: "1" });
+      const r = await fetch("/api/admin/payments?" + qs.toString());
+      const d = await r.json();
 
-    const blob = new Blob([d.csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `payment-report-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+      const blob = new Blob([d.csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `payment-report-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      toast.error("CSV export failed");
+    }
   }
-
-  // Format Date
-  const fDate = (d) => new Date(d).toLocaleString();
 
   // Close modal on ESC
   useEffect(() => {
@@ -88,178 +130,613 @@ export default function Payments() {
     return () => window.removeEventListener("keydown", esc);
   }, []);
 
+  // ---------------- DERIVED STATS ----------------
+  const totalPayments = items.length;
+  const totalCalls = useMemo(
+    () =>
+      items.reduce((acc, p) => acc + (Array.isArray(p.calls) ? p.calls.length : 0), 0),
+    [items]
+  );
+
   return (
-    <div className="bg-gray-50 min-h-screen">
+    <div className="bg-slate-50 min-h-screen">
       <Header user={user} />
 
       <main className="max-w-6xl mx-auto p-4 space-y-4">
 
-        {/* Filter Bar */}
-        <div className="bg-white rounded-xl shadow p-4 grid md:grid-cols-6 gap-3 border">
-          <select className="border p-2 rounded" value={techId} onChange={(e) => setTechId(e.target.value)}>
-            <option value="">All Technicians</option>
-            {techs.map((t) => <option key={t._id} value={t._id}>{t.username}</option>)}
-          </select>
+        {/* ================= FILTER BAR ================= */}
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                Payments Overview
+              </div>
+              <div className="text-sm sm:text-base font-semibold text-slate-900">
+                {rangeLabel}
+              </div>
+            </div>
+            <div className="text-[11px] sm:text-xs text-slate-500">
+              Total Payments:{" "}
+              <span className="font-semibold text-slate-800">{totalPayments}</span>
+              {totalCalls > 0 && (
+                <>
+                  {" "}• Calls:{" "}
+                  <span className="font-semibold text-slate-800">{totalCalls}</span>
+                </>
+              )}
+            </div>
+          </div>
 
-          <select className="border p-2 rounded" value={range} onChange={(e) => setRange(e.target.value)}>
-            <option value="today">Today</option>
-            <option value="7">Last 7 Days</option>
-            <option value="30">Last 30 Days</option>
-            <option value="month">This Month</option>
-            <option value="lastmonth">Last Month</option>
-            <option value="year">This Year</option>
-            <option value="all">All Time</option>
-            <option value="custom">Custom</option>
-          </select>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 sm:gap-3 text-xs sm:text-sm">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-slate-500">Technician</span>
+              <select
+                className="border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 bg-white"
+                value={techId}
+                onChange={(e) => setTechId(e.target.value)}
+              >
+                <option value="">All Technicians</option>
+                {techs.map((t) => (
+                  <option key={t._id} value={t._id}>
+                    {t.username}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {range === "custom" && (
-            <>
-              <input type="date" className="border p-2 rounded" value={from} onChange={(e) => setFrom(e.target.value)} />
-              <input type="date" className="border p-2 rounded" value={to} onChange={(e) => setTo(e.target.value)} />
-            </>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-slate-500">Date Range</span>
+              <select
+                className="border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 bg-white"
+                value={range}
+                onChange={(e) => setRange(e.target.value)}
+              >
+                <option value="today">Today</option>
+                <option value="7">Last 7 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="month">This Month</option>
+                <option value="lastmonth">Last Month</option>
+                <option value="year">This Year</option>
+                <option value="all">All Time</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+
+            {range === "custom" && (
+              <>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[11px] text-slate-500">From</span>
+                  <input
+                    type="date"
+                    className="border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 bg-white"
+                    value={from}
+                    onChange={(e) => setFrom(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[11px] text-slate-500">To</span>
+                  <input
+                    type="date"
+                    className="border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 bg-white"
+                    value={to}
+                    onChange={(e) => setTo(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="flex items-end gap-2 col-span-2 md:col-span-2 justify-end">
+              <button
+                onClick={load}
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition disabled:opacity-60"
+                disabled={loading}
+              >
+                {loading ? "Loading..." : "Apply Filter"}
+              </button>
+
+              <button
+                onClick={exportCSV}
+                className="hidden sm:inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold bg-slate-100 text-slate-800 hover:bg-slate-200 active:scale-95 transition"
+              >
+                Export CSV
+              </button>
+            </div>
+
+            {/* Mobile CSV button */}
+            <button
+              onClick={exportCSV}
+              className="sm:hidden col-span-2 inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold bg-slate-100 text-slate-800 hover:bg-slate-200 active:scale-95 transition"
+            >
+              Export CSV
+            </button>
+          </div>
+        </section>
+
+        {/* ================= SUMMARY CARDS ================= */}
+        <section className="grid md:grid-cols-4 gap-3">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col gap-1">
+            <div className="text-xs text-slate-500">Online Collection</div>
+            <div className="text-2xl sm:text-3xl font-bold text-blue-600">
+              ₹{sum.online}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col gap-1">
+            <div className="text-xs text-slate-500">Cash Collection</div>
+            <div className="text-2xl sm:text-3xl font-bold text-emerald-600">
+              ₹{sum.cash}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col gap-1">
+            <div className="text-xs text-slate-500">Total Collection</div>
+            <div className="text-2xl sm:text-3xl font-bold text-slate-900">
+              ₹{sum.total}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col gap-1">
+            <div className="text-xs text-slate-500">Payments / Calls</div>
+            <div className="text-sm text-slate-800">
+              <span className="font-semibold">{totalPayments}</span> payments
+              {totalCalls > 0 && (
+                <>
+                  {" "}• <span className="font-semibold">{totalCalls}</span> calls
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= DESKTOP TABLE ================= */}
+        <section className="hidden md:block bg-white shadow-sm rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs sm:text-sm">
+              <thead className="bg-slate-100/80">
+                <tr className="text-left text-slate-700">
+                  <th className="p-3">Technician</th>
+                  <th className="p-3">Paying Name</th>
+                  <th className="p-3">Calls</th>
+                  <th className="p-3">Mode</th>
+                  <th className="p-3">Online</th>
+                  <th className="p-3">Cash</th>
+                  <th className="p-3">Total</th>
+                  <th className="p-3">View</th>
+                  <th className="p-3">Date</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td colSpan={9} className="p-6 text-center text-slate-500">
+                      Loading payments...
+                    </td>
+                  </tr>
+                )}
+
+                {!loading && items.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="p-6 text-center text-slate-400">
+                      No payments found for this filter.
+                    </td>
+                  </tr>
+                )}
+
+                {!loading &&
+                  items.map((p) => {
+                    const online = Number(p.onlineAmount || 0);
+                    const cash = Number(p.cashAmount || 0);
+                    const total = online + cash;
+                    const callCount = p.calls?.length || 0;
+                    const callClients = (p.calls || [])
+                      .map((c) => c.clientName)
+                      .filter(Boolean)
+                      .join(", ");
+
+                    return (
+                      <tr
+                        key={p._id}
+                        className="border-t border-slate-100 hover:bg-blue-50/60 transition cursor-pointer"
+                      >
+                        <td className="p-3 text-slate-800">{p.techUsername}</td>
+                        <td className="p-3 text-slate-800">{p.receiver}</td>
+
+                        <td className="p-3">
+                          <div className="font-medium text-slate-800">
+                            {callCount} call{callCount !== 1 ? "s" : ""}
+                          </div>
+                          {callCount > 0 && (
+                            <div className="text-[11px] text-slate-500 truncate max-w-[260px]">
+                              {callClients}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="p-3 text-slate-700">{p.mode}</td>
+                        <td className="p-3 text-blue-600 font-medium">₹{online}</td>
+                        <td className="p-3 text-emerald-600 font-medium">₹{cash}</td>
+                        <td className="p-3 font-semibold text-slate-900">₹{total}</td>
+
+                        <td className="p-3">
+                          <button
+                            onClick={() => setViewItem(p)}
+                            className="text-xs font-semibold text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                          >
+                            View
+                          </button>
+                        </td>
+
+                        <td className="p-3 text-slate-600">
+                          {formatDateTime(p.createdAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ================= MOBILE CARD LIST ================= */}
+        <section className="space-y-3 md:hidden">
+          {loading && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 text-center text-slate-500 text-sm">
+              Loading payments...
+            </div>
           )}
 
-          <button onClick={load} className="bg-blue-600 text-white rounded p-2 hover:bg-blue-700">Load</button>
-          <button onClick={exportCSV} className="bg-gray-200 rounded p-2 hover:bg-gray-300">Export CSV</button>
-        </div>
+          {!loading && items.length === 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-dashed border-slate-300 p-6 text-center text-slate-400 text-sm">
+              No payments found for this filter.
+            </div>
+          )}
 
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-3">
-          <div className="p-4 bg-white shadow rounded-xl border">
-            <div className="text-sm text-gray-500">Online</div>
-            <div className="text-3xl font-bold text-blue-600">₹{sum.online}</div>
-          </div>
-          <div className="p-4 bg-white shadow rounded-xl border">
-            <div className="text-sm text-gray-500">Cash</div>
-            <div className="text-3xl font-bold text-green-600">₹{sum.cash}</div>
-          </div>
-          <div className="p-4 bg-white shadow rounded-xl border">
-            <div className="text-sm text-gray-500">Total</div>
-            <div className="text-3xl font-bold text-gray-900">₹{sum.total}</div>
-          </div>
-        </div>
+          {!loading &&
+            items.map((p) => {
+              const online = Number(p.onlineAmount || 0);
+              const cash = Number(p.cashAmount || 0);
+              const total = online + cash;
+              const callCount = p.calls?.length || 0;
 
-        {/* Payment Table */}
-        <div className="bg-white shadow rounded-xl border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr className="text-left">
-                <th className="p-3">Technician</th>
-                <th className="p-3">Paying</th>
-                <th className="p-3">Calls</th>
-                <th className="p-3">Mode</th>
-                <th className="p-3">Online</th>
-                <th className="p-3">Cash</th>
-                <th className="p-3">Total</th>
-                <th className="p-3">View</th>
-                <th className="p-3">Date</th>
-              </tr>
-            </thead>
+              return (
+                <div
+                  key={p._id}
+                  className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 space-y-2"
+                >
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <div className="text-xs text-slate-500">Technician</div>
+                      <div className="text-sm font-semibold text-slate-900">
+                        {p.techUsername}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-slate-500">Total</div>
+                      <div className="text-sm font-bold text-slate-900">
+                        ₹{total}
+                      </div>
+                    </div>
+                  </div>
 
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan="9" className="p-6 text-center text-gray-500">Loading…</td>
-                </tr>
-              )}
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                    <div className="space-y-0.5">
+                      <div className="font-semibold text-slate-800">
+                        {p.receiver}
+                      </div>
+                      <div>{p.mode}</div>
+                      <div>{formatDateTime(p.createdAt)}</div>
+                    </div>
+                    <div className="space-y-0.5 text-right">
+                      <div>Online: <span className="font-semibold text-blue-600">₹{online}</span></div>
+                      <div>Cash: <span className="font-semibold text-emerald-600">₹{cash}</span></div>
+                      <div>
+                        Calls:{" "}
+                        <span className="font-semibold text-slate-800">
+                          {callCount}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-              {!loading && items.length === 0 && (
-                <tr>
-                  <td colSpan="9" className="p-6 text-center text-gray-400">No payments found</td>
-                </tr>
-              )}
-
-              {!loading &&
-                items.map((p) => {
-                  const online = Number(p.onlineAmount || 0);
-                  const cash = Number(p.cashAmount || 0);
-                  const total = online + cash;
-
-                  return (
-                    <tr key={p._id} className="border-t hover:bg-blue-50 transition">
-                      <td className="p-3">{p.techUsername}</td>
-                      <td className="p-3">{p.receiver}</td>
-
-                      <td className="p-3">
-                        {p.calls?.length || 0} calls
-                        <div className="text-xs text-gray-500">
-                          {p.calls?.map((c) => c.clientName).join(", ")}
-                        </div>
-                      </td>
-
-                      <td className="p-3">{p.mode}</td>
-                      <td className="p-3 text-blue-600">₹{online}</td>
-                      <td className="p-3 text-green-600">₹{cash}</td>
-                      <td className="p-3 font-semibold">₹{total}</td>
-
-                      <td className="p-3">
-                        <button
-                          className="text-blue-600 underline"
-                          onClick={() => setViewItem(p)}
-                        >
-                          View
-                        </button>
-                      </td>
-
-                      <td className="p-3">{fDate(p.createdAt)}</td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-        </div>
+                  <button
+                    onClick={() => setViewItem(p)}
+                    className="mt-2 w-full text-center text-xs font-semibold rounded-xl border border-slate-200 py-1.5 bg-slate-50 active:scale-95 transition"
+                  >
+                    View Call-wise Breakdown
+                  </button>
+                </div>
+              );
+            })}
+        </section>
       </main>
 
-      {/* -------- MODAL: PAYMENT DETAILS -------- */}
+      {/* ================= DETAILS MODAL ================= */}
       <AnimatePresence>
         {viewItem && (
           <motion.div
-            className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-3"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             onClick={(e) => e.target === e.currentTarget && setViewItem(null)}
           >
             <motion.div
-              className="bg-white rounded-xl shadow-xl max-w-3xl w-full p-6 relative overflow-y-auto max-h-[90vh]"
-              initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
+              className="relative w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-3xl bg-white shadow-2xl border border-slate-200 flex flex-col"
+              initial={{ scale: 0.9, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.9, y: 20, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 170, damping: 18 }}
             >
-              <button className="absolute top-3 right-3 text-xl" onClick={() => setViewItem(null)}>✕</button>
+              {/* Modal Header */}
+              <div className="px-4 sm:px-6 pt-4 pb-3 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Payment Details
+                  </div>
+                  <div className="text-base sm:text-lg font-semibold text-slate-900">
+                    {viewItem.receiver} • {viewItem.techUsername}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    {formatDateTime(viewItem.createdAt)} • Mode:{" "}
+                    <span className="font-medium text-slate-800">
+                      {viewItem.mode}
+                    </span>
+                  </div>
+                </div>
 
-              <h2 className="text-xl font-bold mb-3">Payment Details</h2>
-
-              <div className="grid grid-cols-2 gap-3 text-sm mb-4">
-                <div><b>Technician:</b> {viewItem.techUsername}</div>
-                <div><b>Paying Name:</b> {viewItem.receiver}</div>
-                <div><b>Mode:</b> {viewItem.mode}</div>
-                <div><b>Date:</b> {fDate(viewItem.createdAt)}</div>
+                <div className="flex flex-col items-end gap-2">
+                  <button
+                    onClick={() => setViewItem(null)}
+                    className="rounded-full border border-slate-200 h-8 w-8 flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-50 active:scale-95 transition"
+                  >
+                    ✕
+                  </button>
+                  <div className="hidden sm:flex flex-col items-end text-xs text-slate-600">
+                    <span>
+                      Online:{" "}
+                      <span className="font-semibold text-blue-600">
+                        ₹{viewItem.onlineAmount || 0}
+                      </span>
+                    </span>
+                    <span>
+                      Cash:{" "}
+                      <span className="font-semibold text-emerald-600">
+                        ₹{viewItem.cashAmount || 0}
+                      </span>
+                    </span>
+                    <span>
+                      Total:{" "}
+                      <span className="font-semibold text-slate-900">
+                        ₹
+                        {Number(viewItem.onlineAmount || 0) +
+                          Number(viewItem.cashAmount || 0)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <h3 className="font-semibold mb-2">Call Breakdown</h3>
+              {/* Modal Body */}
+              <div className="flex-1 overflow-auto px-4 sm:px-6 py-4 space-y-4">
+                {/* Summary strip (mobile visible) */}
+                <div className="sm:hidden bg-slate-50 rounded-2xl border border-slate-100 px-3 py-2 text-[11px] flex flex-wrap gap-x-4 gap-y-1">
+                  <span>
+                    Online:{" "}
+                    <span className="font-semibold text-blue-600">
+                      ₹{viewItem.onlineAmount || 0}
+                    </span>
+                  </span>
+                  <span>
+                    Cash:{" "}
+                    <span className="font-semibold text-emerald-600">
+                      ₹{viewItem.cashAmount || 0}
+                    </span>
+                  </span>
+                  <span>
+                    Total:{" "}
+                    <span className="font-semibold text-slate-900">
+                      ₹
+                      {Number(viewItem.onlineAmount || 0) +
+                        Number(viewItem.cashAmount || 0)}
+                    </span>
+                  </span>
+                </div>
 
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
-                {viewItem.calls?.map((c, i) => {
-                  const online = Number(c.onlineAmount || 0);
-                  const cash = Number(c.cashAmount || 0);
-                  const total = online + cash;
-
-                  return (
-                    <div key={i} className="border rounded-lg p-3 bg-gray-50 text-sm">
-                      <div><b>Client:</b> {c.clientName}</div>
-                      <div><b>Phone:</b> {c.phone}</div>
-                      <div><b>Address:</b> {c.address}</div>
-                      <div><b>Service:</b> {c.type}</div>
-                      <div><b>Service Price:</b> ₹{c.price}</div>
-                      <div><b>Online:</b> ₹{online}</div>
-                      <div><b>Cash:</b> ₹{cash}</div>
-                      <div><b>Total:</b> ₹{total}</div>
+                {/* Payment Meta */}
+                <div className="grid md:grid-cols-3 gap-3 text-xs sm:text-sm text-slate-700">
+                  <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3">
+                    <div className="text-[11px] text-slate-500 mb-1">
+                      Technician
                     </div>
-                  );
-                })}
+                    <div className="font-semibold text-slate-900">
+                      {viewItem.techUsername}
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3">
+                    <div className="text-[11px] text-slate-500 mb-1">
+                      Paying Name
+                    </div>
+                    <div className="font-semibold text-slate-900">
+                      {viewItem.receiver}
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3">
+                    <div className="text-[11px] text-slate-500 mb-1">
+                      Calls Linked
+                    </div>
+                    <div className="font-semibold text-slate-900">
+                      {viewItem.calls?.length || 0} call
+                      {viewItem.calls?.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Call breakdown heading */}
+                <div className="flex items-center justify-between mt-1">
+                  <h3 className="text-sm sm:text-base font-semibold text-slate-900">
+                    Call-wise Breakdown
+                  </h3>
+                  <div className="text-[11px] text-slate-500">
+                    Every call → price + online + cash clearly दिखेगा
+                  </div>
+                </div>
+
+                {/* Call Breakdown Cards / Table */}
+                {(!viewItem.calls || viewItem.calls.length === 0) && (
+                  <div className="text-xs text-slate-500 bg-slate-50 rounded-xl border border-dashed border-slate-200 px-3 py-2">
+                    No call breakdown found for this payment.
+                  </div>
+                )}
+
+                {viewItem.calls && viewItem.calls.length > 0 && (
+                  <div className="space-y-2">
+                    {/* Desktop: mini-table */}
+                    <div className="hidden sm:block overflow-x-auto rounded-2xl border border-slate-200">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-100/80 text-slate-700">
+                          <tr>
+                            <th className="p-2 text-left">Client</th>
+                            <th className="p-2 text-left">Phone</th>
+                            <th className="p-2 text-left">Address</th>
+                            <th className="p-2 text-left">Service</th>
+                            <th className="p-2 text-right">Service Price</th>
+                            <th className="p-2 text-right">Online</th>
+                            <th className="p-2 text-right">Cash</th>
+                            <th className="p-2 text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {viewItem.calls.map((c, i) => {
+                            const online = Number(c.onlineAmount || 0);
+                            const cash = Number(c.cashAmount || 0);
+                            const total = online + cash;
+                            return (
+                              <tr
+                                key={i}
+                                className="border-t border-slate-100 hover:bg-slate-50/80"
+                              >
+                                <td className="p-2 text-slate-900">
+                                  {c.clientName || "-"}
+                                </td>
+                                <td className="p-2 text-slate-700">
+                                  {c.phone || "-"}
+                                </td>
+                                <td className="p-2 text-slate-700 max-w-[220px] truncate">
+                                  {c.address || "-"}
+                                </td>
+                                <td className="p-2 text-slate-700">
+                                  {c.type || "-"}
+                                </td>
+                                <td className="p-2 text-right text-slate-800">
+                                  ₹{c.price || 0}
+                                </td>
+                                <td className="p-2 text-right text-blue-600">
+                                  ₹{online}
+                                </td>
+                                <td className="p-2 text-right text-emerald-600">
+                                  ₹{cash}
+                                </td>
+                                <td className="p-2 text-right font-semibold text-slate-900">
+                                  ₹{total}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile: stacked cards */}
+                    <div className="sm:hidden space-y-2">
+                      {viewItem.calls.map((c, i) => {
+                        const online = Number(c.onlineAmount || 0);
+                        const cash = Number(c.cashAmount || 0);
+                        const total = online + cash;
+                        return (
+                          <div
+                            key={i}
+                            className="border border-slate-200 rounded-2xl bg-slate-50 p-3 text-[11px] space-y-1"
+                          >
+                            <div className="flex justify-between gap-2">
+                              <div>
+                                <div className="text-[10px] text-slate-500">
+                                  Client
+                                </div>
+                                <div className="font-semibold text-slate-900">
+                                  {c.clientName || "-"}
+                                </div>
+                                <div className="text-slate-600">
+                                  {c.phone || "-"}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[10px] text-slate-500">
+                                  Service
+                                </div>
+                                <div className="font-medium text-slate-800">
+                                  {c.type || "-"}
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  Service Price
+                                </div>
+                                <div className="font-semibold text-slate-900">
+                                  ₹{c.price || 0}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="text-slate-600">
+                              <span className="text-[10px] text-slate-500">
+                                Address:
+                              </span>{" "}
+                              {c.address || "-"}
+                            </div>
+
+                            <div className="flex justify-between items-center pt-1 border-t border-slate-200 mt-1">
+                              <div className="space-y-0.5">
+                                <div>
+                                  Online:{" "}
+                                  <span className="font-semibold text-blue-600">
+                                    ₹{online}
+                                  </span>
+                                </div>
+                                <div>
+                                  Cash:{" "}
+                                  <span className="font-semibold text-emerald-600">
+                                    ₹{cash}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[10px] text-slate-500">
+                                  Total
+                                </div>
+                                <div className="text-sm font-bold text-slate-900">
+                                  ₹{total}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="mt-4 pt-4 border-t text-sm">
-                <b>Total Online:</b> ₹{viewItem.onlineAmount} <br />
-                <b>Total Cash:</b> ₹{viewItem.cashAmount} <br />
-                <b>Grand Total:</b> ₹{Number(viewItem.onlineAmount || 0) + Number(viewItem.cashAmount || 0)}
+              {/* Modal Footer */}
+              <div className="px-4 sm:px-6 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/70">
+                <div className="text-[11px] sm:text-xs text-slate-600">
+                  Press <span className="font-mono">ESC</span> to close or click
+                  outside the box.
+                </div>
+                <button
+                  onClick={() => setViewItem(null)}
+                  className="inline-flex items-center justify-center rounded-xl px-3 py-1.5 text-xs sm:text-sm font-semibold bg-slate-900 text-white hover:bg-black active:scale-95 transition"
+                >
+                  Close
+                </button>
               </div>
             </motion.div>
           </motion.div>
