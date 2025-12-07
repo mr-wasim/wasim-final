@@ -4,6 +4,11 @@ import Header from "../../components/Header";
 import { useEffect, useRef, useState, useTransition, useCallback } from "react";
 import toast from "react-hot-toast";
 
+// ⭐ Preload Sound (ULTRA FAST)
+const forwardSound = typeof window !== "undefined"
+  ? new Audio("/forward.mp3")
+  : null;
+
 // ⛔ No re-render inputs → using refs (FASTEST)
 export default function Forward() {
   const [user, setUser] = useState(null);
@@ -48,7 +53,7 @@ export default function Forward() {
     })();
   }, []);
 
-  // ============== SUBMIT (0ms UI BLOCK) ==============
+  // ============== SUBMIT (ULTRA FAST + SOUND + LOADING) ==============
   const submit = useCallback(
     async (e) => {
       e.preventDefault();
@@ -69,6 +74,12 @@ export default function Forward() {
         return;
       }
 
+      // ⭐ PLAY INSTANT SOUND
+      try {
+        forwardSound.currentTime = 0;
+        forwardSound.play().catch(() => {});
+      } catch {}
+
       startTransition(async () => {
         try {
           const r = await fetch("/api/admin/forward", {
@@ -86,7 +97,7 @@ export default function Forward() {
 
           toast.success("Call forwarded instantly ⚡");
 
-          // RESET FORM (0 lag)
+          // RESET FORM (ZERO LAG)
           clientNameRef.current.value = "";
           phoneRef.current.value = "";
           addressRef.current.value = "";
@@ -139,15 +150,24 @@ export default function Forward() {
 
             <button
               disabled={loading}
-              className={`bg-blue-600 text-white rounded p-2 mt-2 transition ${
+              className={`bg-blue-600 text-white rounded p-2 mt-2 transition flex items-center justify-center gap-2 ${
                 loading ? "opacity-50" : "hover:bg-blue-700"
               }`}
             >
+              {loading && (
+                <span className="loader border-2 w-4 h-4 rounded-full border-white border-t-transparent animate-spin"></span>
+              )}
               {loading ? "Forwarding..." : "Forward Instantly ⚡"}
             </button>
           </form>
         </div>
       </main>
+
+      <style>{`
+        .loader {
+          display: inline-block;
+        }
+      `}</style>
     </div>
   );
 }
