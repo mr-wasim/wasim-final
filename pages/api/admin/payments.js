@@ -1,32 +1,120 @@
-
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import Papa from "papaparse";
 
-async function handler(req,res,user){
-  const db = await getDb();
-  const { techId='', range='today', from='', to='', csv='' } = req.query;
-  const match = {};
-  if(techId) match.techId = new ObjectId(techId);
-  const now = new Date();
-  if(range==='today'){
-    const start = new Date(); start.setHours(0,0,0,0);
-    match.createdAt = { $gte: start };
-  } else if(range==='7'){
-    const start = new Date(now.getTime()-7*24*3600*1000); match.createdAt = { $gte: start };
-  } else if(range==='30'){
-    const start = new Date(now.getTime()-30*24*3600*1000); match.createdAt = { $gte: start };
-  } else if(range==='custom' && (from||to)){
-    match.createdAt = {};
-    if(from) match.createdAt.$gte = new Date(from);
-    if(to) match.createdAt.$lte = new Date(to+'T23:59:59');
+async function handler(req, res, user) {
+  try {
+    const db = await getDb();
+
+    let { techId = "", range = "today", from = "", to = "", csv = "" } = req.query;
+
+    const match = {};
+
+    // ---------------- FILTER BY TECHNICIAN ----------------
+    if (techId && ObjectId.isValid(techId)) {
+      match.techId = new ObjectId(techId);
+    }
+
+    // ---------------- DATE FILTERS ----------------
+    const now = new Date();
+    const start = new Date();
+
+    if (range === "today") {
+      start.setHours(0, 0, 0, 0);
+      match.createdAt = { $gte: start };
+    }
+
+    if (range === "7") {
+      match.createdAt = { $gte: new Date(now.getTime() - 7 * 24 * 3600 * 1000) };
+    }
+
+    if (range === "30") {
+      match.createdAt = { $gte: new Date(now.getTime() - 30 * 24 * 3600 * 1000) };
+    }
+
+    if (range === "month") {
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      match.createdAt = { $gte: first };
+    }
+
+    if (range === "lastmonth") {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const last = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+      match.createdAt = { $gte: first, $lte: last };
+    }
+
+    if (range === "year") {
+      const first = new Date(now.getFullYear(), 0, 1);
+      match.createdAt = { $gte: first };
+    }
+
+    if (range === "custom" && (from || to)) {
+      match.createdAt = {};
+      if (from) match.createdAt.$gte = new Date(from + "T00:00:00");
+      if (to) match.createdAt.$lte = new Date(to + "T23:59:59");
+    }
+
+    // ---------------- FETCH PAYMENTS ----------------
+    const items = await db
+      .collection("payments")
+      .find(match)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    // ---------------- SUM TOTALS ----------------
+    const sum = items.reduce(
+      (acc, p) => {
+        acc.online += Number(p.onlineAmount || 0);
+        acc.cash += Number(p.cashAmount || 0);
+        acc.total += Number(p.onlineAmount || 0) + Number(p.cashAmount || 0);
+        return acc;
+      },
+      { online: 0, cash: 0, total: 0 }
+    );
+
+    // ---------------- CSV EXPORT ----------------
+    if (csv === "1") {
+      const flat = [];
+
+      items.forEach((p) => {
+        (p.calls || []).forEach((c) => {
+          flat.push({
+            Technician: p.techUsername,
+            PayingName: p.receiver,
+            Mode: p.mode,
+
+            CallID: c.callId,
+            ClientName: c.clientName,
+            Phone: c.phone,
+            Address: c.address,
+            ServiceType: c.type,
+            ServicePrice: c.price,
+
+            Online: c.onlineAmount,
+            Cash: c.cashAmount,
+
+            TotalPayment: (c.onlineAmount || 0) + (c.cashAmount || 0),
+            PaymentDate: new Date(p.createdAt).toLocaleString(),
+          });
+        });
+      });
+
+      const csvText = Papa.unparse(flat);
+      return res.json({ csv: csvText });
+    }
+
+    // ---------------- RESPONSE ----------------
+    return res.json({
+      items: items.map((x) => ({
+        ...x,
+        _id: x._id.toString(),
+      })),
+      sum,
+    });
+  } catch (err) {
+    console.error("PAYMENT API ERROR:", err);
+    return res.status(500).json({ ok: false, error: "Server Error" });
   }
-  const items = await db.collection('payments').find(match).sort({createdAt:-1}).toArray();
-  const sum = items.reduce((a,p)=>({ online:a.online+(p.onlineAmount||0), cash:a.cash+(p.cashAmount||0), total:a.total+(p.onlineAmount||0)+(p.cashAmount||0) }), {online:0,cash:0,total:0});
-  if(csv==='1'){
-    const csvText = Papa.unparse(items.map(({_id,receiverSignature,...x})=>x));
-    return res.json({ csv: csvText });
-  }
-  res.json({ items: items.map(x=>({ ...x, _id: x._id.toString() })), sum });
 }
-export default requireRole('admin')(handler);
+
+export default requireRole("admin")(handler);

@@ -1,4 +1,3 @@
-// pages/api/payments/create.js
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 
@@ -11,96 +10,121 @@ async function handler(req, res, user) {
       mode,
       onlineAmount = 0,
       cashAmount = 0,
-      receiverSignature, // optional (e.g., base64)
+      receiverSignature,
+      calls = [], // 🔥 MULTI CALLS
     } = req.body || {};
 
-    // ---- validation (tight & cheap) ----
-    if (!receiver || !mode) {
-      return res.status(400).json({ ok: false, message: "Missing required fields." });
+    // ---------------- VALIDATION ----------------
+    if (!receiver) {
+      return res.status(400).json({ ok: false, message: "Paying name required." });
+    }
+    if (!mode) {
+      return res.status(400).json({ ok: false, message: "Mode required." });
+    }
+    if (!Array.isArray(calls) || calls.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        message: "At least 1 call must be selected.",
+      });
     }
 
     const db = await getDb();
     const payments = db.collection("payments");
 
-    // tech id may be ObjectId or string in DB
     const techId = ObjectId.isValid(user.id) ? new ObjectId(user.id) : user.id;
 
-    // ---- normalize inputs ----
     const numOnline = Number(onlineAmount) || 0;
     const numCash = Number(cashAmount) || 0;
 
-    // ISO day key -> avoids range scans on createdAt >= today
+    // ---------------- DAY KEY ----------------
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const dayKey = today.toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const dayKey = today.toISOString().slice(0, 10);
 
-    // Uniqueness fingerprint for "same payment today"
-    const filter = {
+    // ---------------- PREP CALLS ARRAY ----------------
+    const callArray = calls.map((c) => ({
+      callId: c.callId ? (ObjectId.isValid(c.callId) ? new ObjectId(c.callId) : c.callId) : null,
+      clientName: c.clientName || "",
+      phone: c.phone || "",
+      address: c.address || "",
+      type: c.type || "",
+      price: Number(c.price) || 0,
+      onlineAmount: Number(c.onlineAmount) || 0,
+      cashAmount: Number(c.cashAmount) || 0,
+    }));
+
+    // ---------------- UNIQUE FINGERPRINT (STRONGER) ----------------
+    const fingerprint = {
       techId,
       receiver,
-      mode,
+      dayKey,
       onlineAmount: numOnline,
       cashAmount: numCash,
-      dayKey,
+      callsCount: callArray.length,       // 🔥 अब calls भी uniqueness में शामिल
     };
 
-    const docOnInsert = {
+    // ---------------- PAYMENT DOC ----------------
+    const paymentDoc = {
       techId,
       techUsername: user.username,
       receiver,
       mode,
       onlineAmount: numOnline,
       cashAmount: numCash,
-      receiverSignature,
+      receiverSignature: receiverSignature || null,
       dayKey,
       createdAt: new Date(),
+      calls: callArray,   // 🔥 FULL CALL BREAKDOWN SAVED HERE
     };
 
-    // ---- single round-trip (no findOne) ----
-    const result = await payments.updateOne(filter, { $setOnInsert: docOnInsert }, { upsert: true });
+    // ---------------- UPSERT ----------------
+    const result = await payments.updateOne(
+      fingerprint,
+      { $setOnInsert: paymentDoc },
+      { upsert: true }
+    );
 
-    // private write -> no cache
     res.setHeader("Cache-Control", "private, no-store");
 
     if (result.upsertedCount === 1) {
-      // inserted new document
-      const insertedId = result.upsertedId?._id || result.upsertedId;
       return res.status(200).json({
         ok: true,
-        message: "Payment recorded successfully.",
-        id: String(insertedId || ""),
+        message: "Payment saved successfully.",
+        id: String(result.upsertedId._id || result.upsertedId),
       });
     }
 
-    // matched existing -> duplicate
     return res.status(409).json({
       ok: false,
-      message: "Duplicate payment detected — this payment already recorded today.",
+      message: "Payment already submitted today.",
     });
+
   } catch (error) {
-    // duplicate key safety (if unique index is present)
-    if (error?.code === 11000) {
-      return res.status(409).json({
-        ok: false,
-        message: "Duplicate payment detected — this payment already recorded today.",
-      });
-    }
-    console.error("Payment error:", error);
-    return res.status(500).json({ ok: false, message: "Payment All ready submited" });
+    console.error("🔥 Payment Error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      message: "Server error: Unable to save payment",
+    });
   }
 }
 
 export default requireRole("technician")(handler);
 
 /*
-⚡ Indexes (run once in Mongo shell / migration) — massive speed-up + true uniqueness:
+============================================================
+🔥 REQUIRED INDEXES (RUN ONCE IN MONGO)
+============================================================
 
-// Exact uniqueness for "same payment today"
+// Calls-count based fingerprint → safe & unique
 db.payments.createIndex(
-  { techId: 1, receiver: 1, mode: 1, onlineAmount: 1, cashAmount: 1, dayKey: 1 },
-  { unique: true, name: "uniq_payment_per_day_per_combo" }
+  { techId: 1, receiver: 1, dayKey: 1, onlineAmount: 1, cashAmount: 1, callsCount: 1 },
+  { unique: true, name: "unique_payment_fingerprint" }
 );
 
-// Fast lookups by day/user if you show daily reports
-db.payments.createIndex({ techId: 1, dayKey: 1, createdAt: -1 });
+// Date speed index
+db.payments.createIndex({ techId: 1, createdAt: -1 });
+
+// Fast call lookup
+db.payments.createIndex({ "calls.callId": 1 });
 */
