@@ -22,7 +22,7 @@ import {
 import { getToken, onMessage, isSupported } from "firebase/messaging";
 import { db, messaging } from "../../lib/firebase";
 
-const TABS = ["All Calls", "Today Calls", "Pending", "Closed"];
+const TABS = ["All Calls", "Today Calls", "Pending", "Closed", "Canceled"];
 const PAGE_SIZE = 5; // per page 5 hi dikhेंगे
 
 // =====================
@@ -59,7 +59,11 @@ function CallCardSkeleton() {
 function safeExtract(obj, keys) {
   for (const k of keys) {
     if (obj == null) continue;
-    if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined && obj[k] !== null) {
+    if (
+      Object.prototype.hasOwnProperty.call(obj, k) &&
+      obj[k] !== undefined &&
+      obj[k] !== null
+    ) {
       return obj[k];
     }
   }
@@ -83,6 +87,22 @@ export default function Calls() {
 
   const loadingRef = useRef(false);
   const abortRef = useRef(null);
+
+  // =====================
+  // Persist last selected tab (refresh पर भी वही tab खुला रहे)
+  // =====================
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const savedTab = window.localStorage.getItem("tech_calls_tab");
+    if (savedTab && TABS.includes(savedTab)) {
+      setTab(savedTab);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("tech_calls_tab", tab);
+  }, [tab]);
 
   // =====================
   // Firebase Messaging (robust)
@@ -115,7 +135,9 @@ export default function Calls() {
           toast.custom(
             <div className="bg-blue-600 text-white px-4 py-2 rounded-xl shadow-lg">
               🔔 {payload.notification?.title || "New Notification"}
-              <div className="text-sm text-gray-100">{payload.notification?.body}</div>
+              <div className="text-sm text-gray-100">
+                {payload.notification?.body}
+              </div>
             </div>,
             { duration: 5000 }
           );
@@ -147,15 +169,24 @@ export default function Calls() {
   const filterItems = useCallback(
     (list) => {
       const todayDate = new Date().toISOString().split("T")[0];
+
       const filtered = (() => {
         if (tab === "Today Calls") {
-          return list.filter((c) =>
-            (c.createdAt ? c.createdAt.split("T")[0] : "") === todayDate
+          // Aaj ki calls, लेकिन Canceled को छुपाना है
+          return list.filter(
+            (c) =>
+              (c.createdAt ? c.createdAt.split("T")[0] : "") === todayDate &&
+              c.status !== "Canceled"
           );
         }
-        if (tab === "Pending") return list.filter((c) => c.status === "Pending");
+        if (tab === "Pending")
+          return list.filter((c) => c.status === "Pending");
         if (tab === "Closed") return list.filter((c) => c.status === "Closed");
-        return list;
+        if (tab === "Canceled")
+          return list.filter((c) => c.status === "Canceled");
+
+        // All Calls: सब दिखेंगे लेकिन Canceled को छोड़कर
+        return list.filter((c) => c.status !== "Canceled");
       })();
 
       return filtered;
@@ -194,22 +225,51 @@ export default function Calls() {
         if (d?.success && Array.isArray(d.items)) {
           const mapped = d.items.map((i) => {
             // robust mapping with fallbacks
-            const clientName = safeExtract(i, ["clientName", "name", "client_name", "customerName"]) || "";
-            const phone = safeExtract(i, ["phone", "mobile", "contact"]) || "";
-            const address = safeExtract(i, ["address", "addr", "location"]) || "";
-            const type = safeExtract(i, ["type", "service", "category"]) || "";
-            const price = safeExtract(i, ["price", "amount", "cost"]) || 0;
+            const clientName =
+              safeExtract(i, [
+                "clientName",
+                "name",
+                "client_name",
+                "customerName",
+              ]) || "";
+            const phone =
+              safeExtract(i, ["phone", "mobile", "contact"]) || "";
+            const address =
+              safeExtract(i, ["address", "addr", "location"]) || "";
+            const type =
+              safeExtract(i, ["type", "service", "category"]) || "";
+            const price =
+              safeExtract(i, ["price", "amount", "cost"]) || 0;
             const status = safeExtract(i, ["status"]) || "Pending";
-            const createdAt = safeExtract(i, ["createdAt", "created_at", "created"]) || "";
+            const createdAt =
+              safeExtract(i, ["createdAt", "created_at", "created"]) || "";
 
             // timeZone field fallbacks
-            const timeZone = safeExtract(i, ["timeZone", "time_zone", "timezone", "preferredTime", "preferred_time"]) || "";
+            const timeZone =
+              safeExtract(i, [
+                "timeZone",
+                "time_zone",
+                "timezone",
+                "preferredTime",
+                "preferred_time",
+              ]) || "";
 
             // notes field fallbacks
-            const notes = safeExtract(i, ["notes", "note", "remarks", "remark", "description", "details"]) || "";
+            const notes =
+              safeExtract(i, [
+                "notes",
+                "note",
+                "remarks",
+                "remark",
+                "description",
+                "details",
+              ]) || "";
 
             return {
-              _id: i._id || i.id || (i._id && typeof i._id === "string" ? i._id : ""),
+              _id:
+                i._id ||
+                i.id ||
+                (i._id && typeof i._id === "string" ? i._id : ""),
               clientName,
               phone,
               address,
@@ -306,7 +366,7 @@ export default function Calls() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // tab change → reset to page 1 and load
+  // tab change → reset to page 1
   useEffect(() => {
     setPage(1);
   }, [tab]);
@@ -318,11 +378,14 @@ export default function Calls() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, tab, user]);
 
-  // Update status (same functionality)
+  // Update status (same functionality) + Canceled handling
   async function updateStatus(id, status) {
     const prev = items;
     setUpdatingId(id);
-    setItems((list) => list.map((c) => (c._id === id ? { ...c, status } : c)));
+    // Optimistic update
+    setItems((list) =>
+      list.map((c) => (c._id === id ? { ...c, status } : c))
+    );
     try {
       const r = await fetch("/api/tech/update-call", {
         method: "POST",
@@ -332,6 +395,8 @@ export default function Calls() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Failed");
       toast.success("Status Updated");
+
+      // Closed notification
       if (status === "Closed") {
         await fetch("/api/notify", {
           method: "POST",
@@ -342,6 +407,11 @@ export default function Calls() {
             body: `${user?.username || "Technician"} has closed a call.`,
           }),
         });
+      }
+
+      // Canceled होने पर current list से तुरंत हटा दो
+      if (status === "Canceled") {
+        setItems((list) => list.filter((c) => c._id !== id));
       }
     } catch (err) {
       toast.error(err.message || "Update failed");
@@ -425,7 +495,10 @@ export default function Calls() {
               >
                 <motion.span
                   animate={{ rotate: isFetching ? 360 : 0 }}
-                  transition={{ repeat: isFetching ? Infinity : 0, duration: 1 }}
+                  transition={{
+                    repeat: isFetching ? Infinity : 0,
+                    duration: 1,
+                  }}
                 >
                   <FiRefreshCw />
                 </motion.span>
@@ -467,7 +540,10 @@ export default function Calls() {
             items.map((call, idx) => {
               const pending = call.status === "Pending";
               const closed = call.status === "Closed";
-              const uniqueKey = `${call._id || "row"}_${call.createdAt || "t"}_${idx}`;
+              const canceled = call.status === "Canceled";
+              const uniqueKey = `${
+                call._id || "row"
+              }_${call.createdAt || "t"}_${idx}`;
 
               return (
                 <motion.div
@@ -480,6 +556,8 @@ export default function Calls() {
                       ? "border-rose-200/70 bg-gradient-to-br from-white/80 via-rose-50/70 to-white/70"
                       : closed
                       ? "border-emerald-200/70 bg-gradient-to-br from-white/80 via-emerald-50/70 to-white/70"
+                      : canceled
+                      ? "border-slate-300/70 bg-gradient-to-br from-white/80 via-slate-100/70 to-white/70"
                       : "border-slate-200/70 bg-white/70"
                   }`}
                 >
@@ -495,6 +573,13 @@ export default function Calls() {
                     <div className="absolute right-0 top-0">
                       <div className="px-2 py-1 text-[10px] sm:text-xs font-bold text-white bg-emerald-600 rounded-bl-xl">
                         CALL ENDED
+                      </div>
+                    </div>
+                  )}
+                  {canceled && (
+                    <div className="absolute right-0 top-0">
+                      <div className="px-2 py-1 text-[10px] sm:text-xs font-bold text-white bg-slate-600 rounded-bl-xl">
+                        CANCELED
                       </div>
                     </div>
                   )}
@@ -540,7 +625,11 @@ export default function Calls() {
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide ${
                             pending
                               ? "bg-rose-100 text-rose-700"
-                              : "bg-emerald-100 text-emerald-700"
+                              : closed
+                              ? "bg-emerald-100 text-emerald-700"
+                              : canceled
+                              ? "bg-slate-200 text-slate-800"
+                              : "bg-slate-100 text-slate-700"
                           }`}
                         >
                           {call.status}
@@ -548,8 +637,6 @@ export default function Calls() {
                       </div>
 
                       <div className="mt-2 flex flex-col gap-2 text-[13px] text-slate-700">
-                        {/* Vertical single-column info (TRUNCATE in list) */}
-
                         {/* Phone */}
                         <div className="flex items-start gap-3">
                           <FiPhone className="text-slate-500 mt-1" />
@@ -568,7 +655,9 @@ export default function Calls() {
                         <div className="flex items-start gap-3">
                           <FiMapPin className="text-slate-500 mt-1" />
                           <div className="leading-relaxed">
-                            <div className="text-xs text-slate-500">Address</div>
+                            <div className="text-xs text-slate-500">
+                              Address
+                            </div>
                             <div
                               className="text-sm font-medium truncate max-w-[240px]"
                               title={call.address || ""}
@@ -596,7 +685,9 @@ export default function Calls() {
                         <div className="flex items-start gap-3">
                           <FiCheckCircle className="text-slate-500 mt-1" />
                           <div className="leading-relaxed">
-                            <div className="text-xs text-slate-500">Price</div>
+                            <div className="text-xs text-slate-500">
+                              Price
+                            </div>
                             <div
                               className="text-sm font-medium truncate max-w-[240px]"
                               title={String(call.price ?? "")}
@@ -610,7 +701,9 @@ export default function Calls() {
                         <div className="flex items-start gap-3">
                           <FiClock className="text-slate-500 mt-1" />
                           <div className="leading-relaxed">
-                            <div className="text-xs text-slate-500">Time Zone</div>
+                            <div className="text-xs text-slate-500">
+                              Time Zone
+                            </div>
                             <div
                               className="text-sm font-medium truncate max-w-[240px]"
                               title={call.timeZone || ""}
@@ -624,7 +717,9 @@ export default function Calls() {
                         <div className="flex items-start gap-3">
                           <FiAlertTriangle className="text-slate-500 mt-1" />
                           <div className="leading-relaxed">
-                            <div className="text-xs text-slate-500">Notes</div>
+                            <div className="text-xs text-slate-500">
+                              Notes
+                            </div>
                             <div
                               className="text-sm font-medium truncate max-w-[240px]"
                               title={call.notes || ""}
@@ -654,8 +749,13 @@ export default function Calls() {
                         href={`tel:${call.phone}`}
                       >
                         <motion.span
-                          animate={pending ? { scale: [1, 1.08, 1] } : {}}
-                          transition={{ repeat: pending ? Infinity : 0, duration: 1.3 }}
+                          animate={
+                            pending ? { scale: [1, 1.08, 1] } : {}
+                          }
+                          transition={{
+                            repeat: pending ? Infinity : 0,
+                            duration: 1.3,
+                          }}
                           className="inline-flex"
                         >
                           <FiPhone />
@@ -686,6 +786,7 @@ export default function Calls() {
                       >
                         <option>Pending</option>
                         <option>Closed</option>
+                        <option>Canceled</option>
                       </select>
                     </div>
                   </div>
@@ -758,7 +859,9 @@ export default function Calls() {
               {/* Client */}
               <div>
                 <div className="text-xs text-slate-500">Client</div>
-                <div className="text-lg font-semibold break-words whitespace-pre-wrap">{selectedCall.clientName || "—"}</div>
+                <div className="text-lg font-semibold break-words whitespace-pre-wrap">
+                  {selectedCall.clientName || "—"}
+                </div>
               </div>
 
               {/* Phone */}
@@ -766,7 +869,9 @@ export default function Calls() {
                 <FiPhone className="text-slate-500 mt-1" />
                 <div>
                   <div className="text-xs text-slate-500">Phone</div>
-                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.phone || "—"}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">
+                    {selectedCall.phone || "—"}
+                  </div>
                 </div>
               </div>
 
@@ -775,7 +880,9 @@ export default function Calls() {
                 <FiMapPin className="text-slate-500 mt-1" />
                 <div>
                   <div className="text-xs text-slate-500">Address</div>
-                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.address || "—"}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">
+                    {selectedCall.address || "—"}
+                  </div>
                 </div>
               </div>
 
@@ -785,7 +892,9 @@ export default function Calls() {
                   <FiAlertTriangle className="text-slate-500 mt-1" />
                   <div>
                     <div className="text-xs text-slate-500">Type</div>
-                    <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.type || "—"}</div>
+                    <div className="text-sm break-words whitespace-pre-wrap">
+                      {selectedCall.type || "—"}
+                    </div>
                   </div>
                 </div>
 
@@ -793,7 +902,9 @@ export default function Calls() {
                   <FiCheckCircle className="text-slate-500 mt-1" />
                   <div>
                     <div className="text-xs text-slate-500">Price</div>
-                    <div className="text-sm break-words whitespace-pre-wrap">₹{selectedCall.price ?? 0}</div>
+                    <div className="text-sm break-words whitespace-pre-wrap">
+                      ₹{selectedCall.price ?? 0}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -803,7 +914,9 @@ export default function Calls() {
                 <FiClock className="text-slate-500 mt-1" />
                 <div>
                   <div className="text-xs text-slate-500">Time Zone</div>
-                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.timeZone || "—"}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">
+                    {selectedCall.timeZone || "—"}
+                  </div>
                 </div>
               </div>
 
@@ -812,56 +925,41 @@ export default function Calls() {
                 <FiAlertTriangle className="text-slate-500 mt-1" />
                 <div>
                   <div className="text-xs text-slate-500">Notes</div>
-                  <div className="text-sm break-words whitespace-pre-wrap">{selectedCall.notes || "—"}</div>
+                  <div className="text-sm break-words whitespace-pre-wrap">
+                    {selectedCall.notes || "—"}
+                  </div>
                 </div>
               </div>
 
-             
+              {/* Actions */}
+              <div className="flex justify-end gap-3 mt-4">
+                {/* Call */}
+                <a
+                  href={`tel:${selectedCall.phone}`}
+                  className="h-11 w-11 flex items-center justify-center rounded-xl bg-blue-600 text-white shadow hover:bg-blue-700 active:scale-95 transition"
+                  title="Call Client"
+                >
+                  <FiPhone className="text-[20px]" />
+                </a>
 
-            {/* Actions */}
-<div className="flex justify-end gap-3 mt-4">
+                {/* Maps */}
+                <button
+                  onClick={() => startNavigation(selectedCall.address)}
+                  className="h-11 w-11 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 active:scale-95 transition"
+                  title="Open in Maps"
+                >
+                  <FiMapPin className="text-[20px]" />
+                </button>
 
-  {/* Call */}
-  <a
-    href={`tel:${selectedCall.phone}`}
-    className="
-      h-11 w-11 flex items-center justify-center 
-      rounded-xl bg-blue-600 text-white shadow 
-      hover:bg-blue-700 active:scale-95 transition
-    "
-    title="Call Client"
-  >
-    <FiPhone className="text-[20px]" />
-  </a>
-
-  {/* Maps */}
-  <button
-    onClick={() => startNavigation(selectedCall.address)}
-    className="
-      h-11 w-11 flex items-center justify-center
-      rounded-xl bg-white border border-slate-200 text-slate-700 
-      hover:bg-slate-50 active:scale-95 transition
-    "
-    title="Open in Maps"
-  >
-    <FiMapPin className="text-[20px]" />
-  </button>
-
-  {/* Close */}
-  <button
-    onClick={() => setSelectedCall(null)}
-    className="
-      h-11 w-11 flex items-center justify-center
-      rounded-xl bg-gray-100 border border-slate-300 text-slate-700 
-      hover:bg-gray-200 active:scale-95 transition
-    "
-    title="Close"
-  >
-    ✕
-  </button>
-
-</div>
-
+                {/* Close */}
+                <button
+                  onClick={() => setSelectedCall(null)}
+                  className="h-11 w-11 flex items-center justify-center rounded-xl bg-gray-100 border border-slate-300 text-slate-700 hover:bg-gray-200 active:scale-95 transition"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           </div>
         </div>

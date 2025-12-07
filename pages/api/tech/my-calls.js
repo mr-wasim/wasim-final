@@ -2,14 +2,23 @@
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 
-const ALLOWED_TABS = new Set(["All Calls", "Today Calls", "Pending", "Completed", "Closed"]);
-const PAGE_SIZE = 4;
+const ALLOWED_TABS = new Set([
+  "All Calls",
+  "Today Calls",
+  "Pending",
+  "Closed",
+  "Canceled",
+]);
+
+// Best performing limit
+const PAGE_SIZE = 10;
 
 async function handler(req, res, user) {
   if (req.method !== "GET") return res.status(405).end();
 
   try {
     let { tab = "All Calls", page = 1 } = req.query;
+
     tab = String(tab);
     if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
 
@@ -19,85 +28,80 @@ async function handler(req, res, user) {
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
 
-    const techIdCandidates = [user.id];
-    if (ObjectId.isValid(user.id)) techIdCandidates.push(new ObjectId(user.id));
+    const techIds = [user.id];
+    if (ObjectId.isValid(user.id)) techIds.push(new ObjectId(user.id));
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const match = { techId: { $in: techIds } };
 
-    const match = { techId: { $in: techIdCandidates } };
-    switch (tab) {
-      case "Today Calls":
-        match.createdAt = { $gte: todayStart };
-        break;
-      case "Pending":
-      case "Completed":
-      case "Closed":
-        match.status = tab;
-        break;
-      default:
-        break;
+    if (tab === "Today Calls") {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      match.createdAt = { $gte: start };
+    } else if (["Pending", "Closed", "Canceled"].includes(tab)) {
+      match.status = tab;
     }
 
-    const limit = PAGE_SIZE;
-    const skip = (page - 1) * limit;
+    const skip = (page - 1) * PAGE_SIZE;
 
-    const pipeline = [
-      { $match: match },
-      { $sort: { createdAt: -1 } },
-      {
-        $facet: {
-          items: [
-            { $skip: skip },
-            { $limit: limit },
-            {
-              $project: {
-                _id: { $toString: "$_id" },
+    // 1 record extra fetch to detect "hasMore"
+    const cursor = coll
+      .find(match)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(PAGE_SIZE + 1)
+      .project({
+        clientName: 1,
+        customerName: 1,
+        name: 1,
+        fullName: 1,
+        phone: 1,
+        address: 1,
+        type: 1,
+        price: 1,
+        status: 1,
+        createdAt: 1,
+        timeZone: 1,
+        notes: 1,
+      });
 
-                clientName: {
-                  $ifNull: [
-                    "$clientName",
-                    {
-                      $ifNull: [
-                        "$customerName",
-                        {
-                          $ifNull: [
-                            "$name",
-                            { $ifNull: ["$client", { $ifNull: ["$fullName", ""] }] },
-                          ],
-                        },
-                      ],
-                    },
-                  ],
-                },
+    const docs = await cursor.toArray();
 
-                phone: { $ifNull: ["$phone", ""] },
-                address: { $ifNull: ["$address", ""] },
-                type: { $ifNull: ["$type", ""] },
-                price: { $ifNull: ["$price", 0] },
-                status: { $ifNull: ["$status", "Pending"] },
-                createdAt: 1,
+    // hasMore detect
+    const hasMore = docs.length > PAGE_SIZE;
+    const sliced = docs.slice(0, PAGE_SIZE);
 
-                // 🔥 ADDED FIELDS (FIX)
-                timeZone: { $ifNull: ["$timeZone", ""] },
-                notes: { $ifNull: ["$notes", ""] },
-              },
-            },
-          ],
-          total: [{ $count: "count" }],
-        },
-      },
-    ];
-
-    const [result] = await coll.aggregate(pipeline).toArray();
-    const items = result?.items ?? [];
-    const total = result?.total?.[0]?.count ?? 0;
+    const items = sliced.map((i) => ({
+      _id: String(i._id),
+      clientName:
+        i.clientName ??
+        i.customerName ??
+        i.name ??
+        i.fullName ??
+        "Unknown",
+      phone: i.phone ?? "",
+      address: i.address ?? "",
+      type: i.type ?? "",
+      price: i.price ?? 0,
+      status: i.status ?? "Pending",
+      createdAt: i.createdAt ?? "",
+      timeZone: i.timeZone ?? "",
+      notes: i.notes ?? "",
+    }));
 
     res.setHeader("Cache-Control", "private, no-store");
-    return res.status(200).json({ success: true, items, total });
+
+    return res.status(200).json({
+      success: true,
+      items,
+      page,
+      pageSize: PAGE_SIZE,
+      hasMore, // 👈 सबसे ज़रूरी value
+    });
   } catch (err) {
     console.error("forwarded-calls error:", err);
-    return res.status(500).json({ success: false, error: "Internal Server Error" });
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal Server Error" });
   }
 }
 

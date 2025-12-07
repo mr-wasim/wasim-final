@@ -83,8 +83,9 @@ export default function Header({
         { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall aria-hidden="true" /> },
         { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall aria-hidden="true" /> },
 
-        // ⭐ NEW MENU HERE ⭐
-        { href: "/admin/all-calls", label: "All Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+        /* ⭐ REPLACED OLD ENTRY → Added 2 New Working Menus */
+        { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers aria-hidden="true" /> },
+        { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiPhoneCall aria-hidden="true" /> },
 
         { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign aria-hidden="true" /> },
         { href: "/admin/techs", label: "Technicians", icon: <FiUsers aria-hidden="true" /> },
@@ -118,7 +119,7 @@ export default function Header({
     <>
       <header
         className={[
-          "sticky top-0 z-[90] transition-all duration-300",
+          "sticky top-0 z-[90] transition-all duration-200",   // ⚡ animation speed optimized
           "bg-gradient-to-r from-[#1e3a8a] via-[#1d4ed8] to-[#1e40af]",
           "backdrop-blur-xl bg-opacity-90",
           scrolled ? "shadow-2xl shadow-blue-900/20" : "shadow-lg shadow-blue-900/10",
@@ -134,7 +135,7 @@ export default function Header({
               aria-label={menuOpen ? "Close menu" : "Open menu"}
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((v) => !v)}
-              className="md:hidden text-2xl text-white hover:scale-110 active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-white/60 rounded-lg p-1"
+              className="md:hidden text-2xl text-white hover:scale-105 active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-white/60 rounded-lg p-1"
             >
               {menuOpen ? <FiX /> : <FiMenu />}
             </button>
@@ -144,8 +145,8 @@ export default function Header({
                 <motion.div
                   layout
                   className="h-9 w-9 rounded-xl bg-white/15 ring-1 ring-white/20 grid place-items-center shadow-inner"
-                  whileHover={shouldReduceMotion ? {} : { rotate: 8, scale: 1.05 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                  whileHover={shouldReduceMotion ? {} : { scale: 1.05 }}     // ⚡ fast hover
+                  transition={{ duration: 0.12 }}
                 >
                   <span className="text-white font-black">CS</span>
                 </motion.div>
@@ -153,7 +154,7 @@ export default function Header({
                   Chimney <span className="text-blue-100">Solutions</span>
                 </h1>
               </div>
-              <div className="h-0.5 w-0 group-hover:w-full transition-all duration-500 bg-white/30 rounded-full" />
+              <div className="h-0.5 w-0 group-hover:w-full transition-all duration-300 bg-white/30 rounded-full" /> {/* ⚡ faster */}
             </Link>
           </div>
 
@@ -172,14 +173,14 @@ export default function Header({
                         <span
                           className={[
                             "flex items-center gap-2 px-4 py-2 rounded-[18px] text-sm whitespace-nowrap",
-                            "transition-[transform,box-shadow] duration-200",
+                            "transition duration-150",   // ⚡ faster
                             active ? "text-white" : "text-gray-700 hover:text-gray-900",
                           ].join(" ")}
                         >
                           {active && (
                             <motion.span
                               layoutId="adminTabHighlight"
-                              transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                              transition={{ duration: 0.15 }}   // ⚡ faster
                               className="absolute inset-0 rounded-[18px] bg-gradient-to-r from-indigo-600 to-blue-600 shadow-md"
                               aria-hidden="true"
                             />
@@ -199,15 +200,13 @@ export default function Header({
                     <Link
                       href={link.href}
                       className={[
-                        "flex items-center gap-2 px-2.5 py-2 rounded-xl transition-all duration-200",
+                        "flex items-center gap-2 px-2.5 py-2 rounded-xl transition-all duration-150",
                         isActive(link.href)
                           ? "bg-white/15 ring-1 ring-white/20 text-white"
                           : "text-white/80 hover:text-white hover:bg-white/10",
                       ].join(" ")}
                     >
-                      <span className="text-base" aria-hidden="true">
-                        {link.icon}
-                      </span>
+                      <span className="text-base" aria-hidden="true">{link.icon}</span>
                       <span className="truncate">{link.label}</span>
                     </Link>
                   </div>
@@ -224,7 +223,7 @@ export default function Header({
                 onClick={() => setProfileOpen((v) => !v)}
                 aria-haspopup="menu"
                 aria-expanded={profileOpen}
-                className="flex items-center gap-2 bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-sm text-white font-semibold shadow-inner transition-all focus:outline-none focus:ring-2 focus:ring-white/60"
+                className="flex items-center gap-2 bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-sm text-white font-semibold shadow-inner transition active:scale-95"
               >
                 <div className="h-7 w-7 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center">
                   <span className="text-[11px] font-bold">{initials(user?.name)}</span>
@@ -236,10 +235,10 @@ export default function Header({
               <AnimatePresence>
                 {profileOpen && (
                   <motion.div
-                    initial={{ opacity: 0, y: -6 }}
+                    initial={{ opacity: 0, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: shouldReduceMotion ? 0 : 0.18 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.12 }}  // ⚡ instant dropdown
                     className="absolute right-0 mt-3 w-56 bg-white rounded-2xl shadow-2xl overflow-hidden z-[120] ring-1 ring-black/5"
                     role="menu"
                   >
@@ -281,7 +280,7 @@ export default function Header({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+              transition={{ duration: 0.18 }}   // ⚡ faster
               onClick={() => setMenuOpen(false)}
             />
 
@@ -292,9 +291,7 @@ export default function Header({
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
               transition={{
-                type: shouldReduceMotion ? "tween" : "spring",
-                stiffness: 120,
-                damping: 18,
+                duration: 0.2,   // ⚡ fast slide
               }}
               className="fixed top-0 left-0 w-80 max-w-[85vw] h-full bg-gradient-to-b from-[#1d4ed8] to-[#1e40af] text-white z-[110] p-6 flex flex-col shadow-2xl md:hidden overflow-y-auto"
             >
@@ -344,7 +341,7 @@ export default function Header({
                 >
                   <FiLogOut aria-hidden="true" /> Logout
                 </button>
-                <p className="text-[11px] text-white/70 mt-3">v1.0 • Secure • Fast</p>
+                <p className="text-[11px] text-white/70 mt-3">v1.0 • Secure • Fast UI</p>
               </div>
             </motion.nav>
           </>
