@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FiMenu,
+    FiMenu,
   FiX,
   FiUser,
   FiHome,
@@ -14,6 +14,10 @@ import {
   FiUsers,
   FiPlus,
   FiLogOut,
+  FiEdit,
+  FiArrowRight,
+  FiPhoneForwarded,
+  FiUserCheck
 } from "react-icons/fi";
 
 /** Safe, SSR-friendly reduced-motion hook */
@@ -75,31 +79,39 @@ export default function Header({
     finally { safeNavigate("/login"); }
   };
 
-  const navLinks = useMemo(
-    () => ({
-      admin: [
-        { href: "/admin", label: "Dashboard", icon: <FiHome aria-hidden="true" /> },
-        { href: "/admin/forms", label: "Service Forms", icon: <FiFileText aria-hidden="true" /> },
-        { href: "/admin/forward", label: "Call Forwarding", icon: <FiPhoneCall aria-hidden="true" /> },
-        { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+ const navLinks = useMemo(
+  () => ({
+    admin: [
+      { href: "/admin", label: "Dashboard", icon: <FiHome /> },
+      { href: "/admin/forms", label: "Service Forms", icon: <FiFileText /> },
 
-        /* ⭐ NEW MENU ADDED HERE */
-        { href: "/admin/all-calls", label: "All Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+      // Forward Call (Best Icon)
+      { href: "/admin/forward", label: "Forward Call", icon: <FiPhoneForwarded /> },
 
-        { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers aria-hidden="true" /> },
-        { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiPhoneCall aria-hidden="true" /> },
+      // Forwarded Calls
+      { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiArrowRight /> },
 
-        { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign aria-hidden="true" /> },
-        { href: "/admin/techs", label: "Technicians", icon: <FiUsers aria-hidden="true" /> },
-        { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus aria-hidden="true" /> },
-      ],
-      technician: [
-        { href: "/tech", label: "Dashboard", icon: <FiHome aria-hidden="true" /> },
-        { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign aria-hidden="true" /> },
-      ],
-    }),
-    []
-  );
+      // Edit Calls – EDIT ICON
+      { href: "/admin/all-calls", label: "Edit Calls", icon: <FiEdit /> },
+
+      { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
+
+      // Technician Calls – TECHNICIAN ICON
+      { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiUserCheck /> },
+
+      { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
+      { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
+      { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus /> },
+    ],
+
+    technician: [
+      { href: "/tech", label: "Dashboard", icon: <FiHome /> },
+      { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign /> },
+    ],
+  }),
+  []
+);
+
 
   const links = navLinks[user?.role] || [];
   const isActive = (href) =>
