@@ -33,6 +33,21 @@ import { db, messaging } from "../../lib/firebase";
 const TABS = ["All Calls", "Today Calls", "Pending", "Closed", "Canceled"];
 const PAGE_SIZE = 5;
 
+// 🔊 ULTRA FAST STATUS SOUND (safe for SSR)
+const statusSound =
+  typeof window !== "undefined" ? new Audio("/forward.mp3") : null;
+
+function playStatusSound() {
+  try {
+    if (!statusSound) return;
+    statusSound.currentTime = 0;
+    statusSound.play().catch(() => {});
+  } catch (e) {
+    // ignore audio errors – never block UI
+    console.warn("Sound error:", e?.message || e);
+  }
+}
+
 // =====================
 // UI: lightweight Skeleton
 // =====================
@@ -728,6 +743,9 @@ export default function Calls() {
   // Update status
   const updateStatus = useCallback(
     async (id, status) => {
+      // 🔊 SOUND – every status change (Pending / Closed / Canceled)
+      playStatusSound();
+
       setUpdatingId(id);
       const prev = items;
       setItems((list) =>
@@ -859,7 +877,7 @@ export default function Calls() {
         {/* Meta */}
         <div className="text-xs sm:text-sm text-gray-600 px-1">
           Page <span className="font-semibold">{page}</span> of{" "}
-            <span className="font-semibold">{totalPages}</span>{" "}
+          <span className="font-semibold">{totalPages}</span>{" "}
           <span className="ml-2">({items.length} on this page)</span>
           {typeof total === "number" && total > 0 && (
             <span className="ml-2">
