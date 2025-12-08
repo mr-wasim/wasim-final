@@ -10,7 +10,6 @@ const ALLOWED_TABS = new Set([
   "Canceled",
 ]);
 
-// Best performing limit
 const PAGE_SIZE = 10;
 
 async function handler(req, res, user) {
@@ -27,6 +26,7 @@ async function handler(req, res, user) {
 
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
+    const paymentColl = db.collection("payments"); // ⭐ Payment records
 
     const techIds = [user.id];
     if (ObjectId.isValid(user.id)) techIds.push(new ObjectId(user.id));
@@ -43,7 +43,6 @@ async function handler(req, res, user) {
 
     const skip = (page - 1) * PAGE_SIZE;
 
-    // 1 record extra fetch to detect "hasMore"
     const cursor = coll
       .find(match)
       .sort({ createdAt: -1 })
@@ -62,30 +61,55 @@ async function handler(req, res, user) {
         createdAt: 1,
         timeZone: 1,
         notes: 1,
+        paymentStatus: 1,
       });
 
     const docs = await cursor.toArray();
 
-    // hasMore detect
+    // ⭐⭐⭐ AUTO FIX: OLD PAYMENT STATUS UPDATE ⭐⭐⭐
+    for (const c of docs) {
+      if (!c.paymentStatus || c.paymentStatus === "Pending") {
+        const paid = await paymentColl.findOne({
+          "calls.callId": String(c._id),
+        });
+
+        if (paid) {
+          await coll.updateOne(
+            { _id: c._id },
+            { $set: { paymentStatus: "Paid" } }
+          );
+          c.paymentStatus = "Paid";
+        } else {
+          c.paymentStatus = "Pending";
+        }
+      }
+    }
+    // ⭐⭐⭐ END AUTO FIX ⭐⭐⭐
+
     const hasMore = docs.length > PAGE_SIZE;
     const sliced = docs.slice(0, PAGE_SIZE);
 
     const items = sliced.map((i) => ({
       _id: String(i._id),
+
       clientName:
         i.clientName ??
         i.customerName ??
         i.name ??
         i.fullName ??
         "Unknown",
+
       phone: i.phone ?? "",
       address: i.address ?? "",
       type: i.type ?? "",
       price: i.price ?? 0,
+
       status: i.status ?? "Pending",
       createdAt: i.createdAt ?? "",
       timeZone: i.timeZone ?? "",
       notes: i.notes ?? "",
+
+      paymentStatus: i.paymentStatus === "Paid" ? "Paid" : "Pending",
     }));
 
     res.setHeader("Cache-Control", "private, no-store");
@@ -95,7 +119,7 @@ async function handler(req, res, user) {
       items,
       page,
       pageSize: PAGE_SIZE,
-      hasMore, // 👈 सबसे ज़रूरी value
+      hasMore,
     });
   } catch (err) {
     console.error("forwarded-calls error:", err);

@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import Header from "../../components/Header";
 import BottomNav from "../../components/BottomNav";
 import SignaturePad from "react-signature-canvas";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
 
@@ -26,7 +26,7 @@ export default function Payments() {
 
   const [deviceToken, setDeviceToken] = useState(null);
 
-  // 🔹 Paying name + signature only (mode/amounts auto-calc होंगे)
+  // 🔹 Paying name + signature only
   const [form, setForm] = useState({
     receiver: "",
     receiverSignature: "",
@@ -82,8 +82,8 @@ export default function Payments() {
     return () => controller.abort();
   }, []);
 
-  // ✅ Load technician calls (same source जैसा /tech/my-calls वाले page में)
-  const loadCalls = async () => {
+  // ✅ Load technician calls
+  const loadCalls = useCallback(async () => {
     try {
       setCallsLoading(true);
       const params = new URLSearchParams({
@@ -98,21 +98,54 @@ export default function Payments() {
       const d = await r.json();
 
       if (d?.success && Array.isArray(d.items)) {
-        const mapped = d.items.map((i) => ({
-          _id: i._id || i.id || "",
-          clientName:
-            i.clientName ??
-            i.customerName ??
-            i.name ??
-            i.fullName ??
-            "",
-          phone: i.phone ?? "",
-          address: i.address ?? "",
-          type: i.type ?? "",
-          price: i.price ?? 0,
-          status: i.status ?? "Pending",
-          createdAt: i.createdAt ?? "",
-        }));
+        const mapped = d.items.map((i) => {
+          const rawPaymentStatus =
+            i.paymentStatus ||
+            i.payment_status ||
+            i.payment_state ||
+            i.paymentDone ||
+            i.isPaymentDone ||
+            "";
+
+          let paymentStatus = "Pending";
+
+          if (rawPaymentStatus === true) {
+            paymentStatus = "Paid";
+          } else if (rawPaymentStatus === false) {
+            paymentStatus = "Pending";
+          } else if (typeof rawPaymentStatus === "string") {
+            const s = rawPaymentStatus.toLowerCase();
+            if (
+              s === "paid" ||
+              s === "payment done" ||
+              s === "done" ||
+              s === "completed"
+            ) {
+              paymentStatus = "Paid";
+            }
+          }
+
+          const createdAt = i.createdAt ? new Date(i.createdAt) : null;
+
+          return {
+            _id: i._id || i.id || "",
+            clientName:
+              i.clientName ??
+              i.customerName ??
+              i.name ??
+              i.fullName ??
+              "",
+            phone: i.phone ?? "",
+            address: i.address ?? "",
+            type: i.type ?? "",
+            price: i.price ?? 0,
+            status: i.status ?? "Pending",
+            createdAt: i.createdAt ?? "",
+            createdAtTime: createdAt ? createdAt.getTime() : 0, // ⚡ numeric cache
+            paymentStatus,
+          };
+        });
+
         setCalls(mapped);
       }
     } catch (err) {
@@ -120,19 +153,21 @@ export default function Payments() {
     } finally {
       setCallsLoading(false);
     }
-  };
+  }, []);
 
-  // पहली बार page load पर ही calls भी preload कर देंगे
+  // पहली बार page load पर calls preload
   useEffect(() => {
     if (!user) return;
     loadCalls();
-  }, [user]);
+  }, [user, loadCalls]);
 
-  // ✅ Firebase Push Notification Setup (lazy load)
+  // ✅ Firebase Push Notification Setup (lazy load, non-blocking)
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
+        if (typeof window === "undefined" || !"Notification" in window) return;
+
         const { getMessaging, getToken, onMessage } = await import(
           "firebase/messaging"
         );
@@ -160,11 +195,12 @@ export default function Payments() {
 
         if (mounted && token) {
           setDeviceToken(token);
-          await fetch("/api/save-fcm-token", {
+          // fire-and-forget, no await (⚡ non-blocking)
+          fetch("/api/save-fcm-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token }),
-          });
+          }).catch(() => {});
         }
 
         onMessage(messaging, (payload) => {
@@ -186,20 +222,23 @@ export default function Payments() {
   }, []);
 
   // ✅ Clear signature
-  const clearSig = () => {
+  const clearSig = useCallback(() => {
     sigRef.current?.clear();
     setForm((prev) => ({ ...prev, receiverSignature: "" }));
-  };
+  }, []);
 
   // ✅ Input handler
-  const handleChange = (field) => (e) =>
-    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const handleChange = useCallback(
+    (field) => (e) =>
+      setForm((prev) => ({ ...prev, [field]: e.target.value })),
+    []
+  );
 
   // 🔹 Add call to selected list (multi-select)
-  const addCallToSelected = (call) => {
+  const addCallToSelected = useCallback((call) => {
     if (!call) return;
     setSelectedCalls((prev) => {
-      if (prev.some((c) => c._id === call._id)) return prev; // already added
+      if (prev.some((c) => c._id === call._id)) return prev;
       return [
         ...prev,
         {
@@ -210,13 +249,13 @@ export default function Payments() {
       ];
     });
     setCallModalOpen(false);
-  };
+  }, []);
 
-  const removeSelectedCall = (id) => {
+  const removeSelectedCall = useCallback((id) => {
     setSelectedCalls((prev) => prev.filter((c) => c._id !== id));
-  };
+  }, []);
 
-  const updateSelectedAmount = (id, field, value) => {
+  const updateSelectedAmount = useCallback((id, field, value) => {
     setSelectedCalls((prev) =>
       prev.map((c) =>
         c._id === id
@@ -227,7 +266,7 @@ export default function Payments() {
           : c
       )
     );
-  };
+  }, []);
 
   // 🔢 Totals
   const { totalOnline, totalCash, totalCombined } = useMemo(() => {
@@ -244,112 +283,149 @@ export default function Payments() {
     };
   }, [selectedCalls]);
 
-  // 🔍 Filtered calls for modal search
+  // 🔍 Filtered + Sorted calls for modal search
   const filteredCalls = useMemo(() => {
-    if (!callSearch.trim()) return calls;
-    const q = callSearch.toLowerCase();
-    return calls.filter(
-      (c) =>
-        (c.clientName || "").toLowerCase().includes(q) ||
-        (c.phone || "").toLowerCase().includes(q) ||
-        (c.address || "").toLowerCase().includes(q)
-    );
+    let base = calls;
+    if (callSearch.trim()) {
+      const q = callSearch.toLowerCase();
+      base = calls.filter(
+        (c) =>
+          (c.clientName || "").toLowerCase().includes(q) ||
+          (c.phone || "").toLowerCase().includes(q) ||
+          (c.address || "").toLowerCase().includes(q)
+      );
+    }
+
+    const sorted = [...base].sort((a, b) => {
+      const aPaid = a.paymentStatus === "Paid";
+      const bPaid = b.paymentStatus === "Paid";
+
+      if (aPaid !== bPaid) {
+        return aPaid ? 1 : -1; // Pending first
+      }
+
+      const aTime = a.createdAtTime || 0;
+      const bTime = b.createdAtTime || 0;
+      return bTime - aTime; // latest first
+    });
+
+    return sorted;
   }, [calls, callSearch]);
 
-  // ✅ Submit form
-  async function submit(e) {
-    e.preventDefault();
+  // ✅ Submit form (single fast API call + instant UI update)
+  const submit = useCallback(
+    async (e) => {
+      e.preventDefault();
 
-    if (!selectedCalls.length) {
-      return toast.error("Please select at least one call");
-    }
-
-    if (!form.receiver) {
-      return toast.error("Please enter paying name");
-    }
-
-    const receiverSignature =
-      form.receiverSignature || sigRef.current?.toDataURL();
-    if (!receiverSignature) {
-      return toast.error("Receiver signature required");
-    }
-
-    // Mode derive automatically
-    let mode = "";
-    if (totalOnline > 0 && totalCash > 0) mode = "Both";
-    else if (totalOnline > 0) mode = "Online";
-    else if (totalCash > 0) mode = "Cash";
-
-    if (!mode) {
-      return toast.error("Please enter at least one amount (online/cash)");
-    }
-
-    try {
-      const payload = {
-        receiver: form.receiver,
-        mode,
-        onlineAmount: String(totalOnline),
-        cashAmount: String(totalCash),
-        receiverSignature,
-        // per-call breakdown (backend extra info)
-        calls: selectedCalls.map((c) => ({
-          callId: c._id,
-          clientName: c.clientName,
-          phone: c.phone,
-          address: c.address,
-          type: c.type,
-          price: c.price,
-          onlineAmount: Number(c.onlineAmount || 0),
-          cashAmount: Number(c.cashAmount || 0),
-        })),
-      };
-
-      const r = await fetch("/api/tech/payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const d = await r.json();
-      if (!r.ok) {
-        return toast.error(d.message || "Failed to record payment");
+      if (!selectedCalls.length) {
+        return toast.error("Please select at least one call");
       }
 
-      // 🔊 SOUND
-      playSuccessSound();
+      if (!form.receiver) {
+        return toast.error("Please enter paying name");
+      }
 
-      // 🎉 Toast
-      toast.success("✅ Payment recorded successfully");
+      const receiverSignature =
+        form.receiverSignature || sigRef.current?.toDataURL();
+      if (!receiverSignature) {
+        return toast.error("Receiver signature required");
+      }
 
-      // 🔔 Optional notification
-      if (deviceToken) {
-        await fetch("/api/sendNotification", {
+      let mode = "";
+      if (totalOnline > 0 && totalCash > 0) mode = "Both";
+      else if (totalOnline > 0) mode = "Online";
+      else if (totalCash > 0) mode = "Cash";
+
+      if (!mode) {
+        return toast.error("Please enter at least one amount (online/cash)");
+      }
+
+      try {
+        const payload = {
+          receiver: form.receiver,
+          mode,
+          onlineAmount: String(totalOnline),
+          cashAmount: String(totalCash),
+          receiverSignature,
+          calls: selectedCalls.map((c) => ({
+            callId: c._id,
+            clientName: c.clientName,
+            phone: c.phone,
+            address: c.address,
+            type: c.type,
+            price: c.price,
+            onlineAmount: Number(c.onlineAmount || 0),
+            cashAmount: Number(c.cashAmount || 0),
+          })),
+        };
+
+        const r = await fetch("/api/tech/payment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            token: deviceToken,
-            title: "New Payment Recorded 💰",
-            body: `${form.receiver} paid ₹${totalCombined} (${mode})`,
-          }),
+          body: JSON.stringify(payload),
         });
+
+        const d = await r.json();
+        if (!r.ok) {
+          return toast.error(d.message || "Failed to record payment");
+        }
+
+        // 🟢 LOCAL STATE UPDATE – turant Payment Done
+        const paidCallIds = selectedCalls.map((c) => c._id);
+        setCalls((prev) =>
+          prev.map((c) =>
+            paidCallIds.includes(c._id)
+              ? { ...c, paymentStatus: "Paid" }
+              : c
+          )
+        );
+
+        // 🔊 SOUND
+        playSuccessSound();
+
+        // 🎉 Toast
+        toast.success("✅ Payment recorded successfully");
+
+        // 🔔 Optional notification (fire-and-forget)
+        if (deviceToken) {
+          fetch("/api/sendNotification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              token: deviceToken,
+              title: "New Payment Recorded 💰",
+              body: `${form.receiver} paid ₹${totalCombined} (${mode})`,
+            }),
+          }).catch(() => {});
+        }
+
+        // 🎉 Happy overlay
+        setShowSuccessOverlay(true);
+        setTimeout(() => setShowSuccessOverlay(false), 1600);
+
+        // Reset after success
+        setForm({
+          receiver: "",
+          receiverSignature: "",
+        });
+        setSelectedCalls([]);
+        clearSig();
+      } catch (err) {
+        console.error("Payment submission failed:", err);
+        toast.error("Error recording payment");
       }
-
-      // 🎉 Happy overlay
-      setShowSuccessOverlay(true);
-      setTimeout(() => setShowSuccessOverlay(false), 1600);
-
-      // Reset after success
-      setForm({
-        receiver: "",
-        receiverSignature: "",
-      });
-      setSelectedCalls([]);
-      clearSig();
-    } catch (err) {
-      console.error("Payment submission failed:", err);
-      toast.error("Error recording payment");
-    }
-  }
+    },
+    [
+      selectedCalls,
+      form.receiver,
+      form.receiverSignature,
+      totalOnline,
+      totalCash,
+      totalCombined,
+      deviceToken,
+      clearSig,
+    ]
+  );
 
   // ✅ Skeleton UI while loading
   if (loading)
@@ -404,13 +480,30 @@ export default function Payments() {
                     className="border rounded-xl p-3 bg-slate-50 flex flex-col gap-2"
                   >
                     <div className="flex justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-semibold">
-                          {c.clientName || "Unknown"}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="truncate">
+                            <div className="text-sm font-semibold truncate">
+                              {c.clientName || "Unknown"}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              {c.phone || "-"}
+                            </div>
+                          </div>
+
+                          <span
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+                              c.paymentStatus === "Paid"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : "bg-amber-50 text-amber-700 border-amber-200"
+                            }`}
+                          >
+                            {c.paymentStatus === "Paid"
+                              ? "Payment Done"
+                              : "Pending Payment"}
+                          </span>
                         </div>
-                        <div className="text-xs text-gray-600">
-                          {c.phone || "-"}
-                        </div>
+
                         <div className="text-xs text-gray-500 line-clamp-1">
                           {c.address || "-"}
                         </div>
@@ -420,7 +513,7 @@ export default function Payments() {
                       </div>
                       <button
                         type="button"
-                        className="text-xs text-red-500 hover:text-red-600"
+                        className="text-xs text-red-500 hover:text-red-600 flex-shrink-0"
                         onClick={() => removeSelectedCall(c._id)}
                       >
                         ✕ Remove
@@ -552,7 +645,7 @@ export default function Payments() {
             exit={{ opacity: 0 }}
           >
             <motion.div
-              className="w-full max-w-md bg-white rounded-2xl shadow-xl p-4 max-h-[80vh] flex flex-col"
+              className="w-full max-w-md bg-white rounded-2xl shadow-xl p-4 max-h:[80vh] max-h-[80vh] flex flex-col"
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -589,15 +682,33 @@ export default function Payments() {
                       onClick={() => addCallToSelected(c)}
                       className="w-full border rounded-xl px-3 py-2 text-sm hover:bg-blue-50 text-left transition"
                     >
-                      <div className="font-semibold">
-                        {c.clientName || "Unknown"}
-                      </div>
-                      <div className="text-xs text-gray-600">{c.phone}</div>
-                      <div className="text-xs text-gray-500 line-clamp-1">
-                        {c.address}
-                      </div>
-                      <div className="text-[11px] text-gray-400">
-                        {c.type || "Service"} • ₹{c.price}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold truncate">
+                            {c.clientName || "Unknown"}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {c.phone}
+                          </div>
+                          <div className="text-xs text-gray-500 line-clamp-1">
+                            {c.address}
+                          </div>
+                          <div className="text-[11px] text-gray-400">
+                            {c.type || "Service"} • ₹{c.price}
+                          </div>
+                        </div>
+
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+                            c.paymentStatus === "Paid"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}
+                        >
+                          {c.paymentStatus === "Paid"
+                            ? "Payment Done"
+                            : "Pending Payment"}
+                        </span>
                       </div>
                     </button>
                   ))}

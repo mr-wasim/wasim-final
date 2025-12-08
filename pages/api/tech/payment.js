@@ -11,37 +11,27 @@ async function handler(req, res, user) {
       onlineAmount = 0,
       cashAmount = 0,
       receiverSignature,
-      calls = [], // 🔥 MULTI CALLS
+      calls = [],
     } = req.body || {};
 
-    // ---------------- VALIDATION ----------------
-    if (!receiver) {
-      return res.status(400).json({ ok: false, message: "Paying name required." });
-    }
-    if (!mode) {
-      return res.status(400).json({ ok: false, message: "Mode required." });
-    }
-    if (!Array.isArray(calls) || calls.length === 0) {
-      return res.status(400).json({
-        ok: false,
-        message: "At least 1 call must be selected.",
-      });
-    }
+    if (!receiver) return res.status(400).json({ ok: false, message: "Paying name required." });
+    if (!mode) return res.status(400).json({ ok: false, message: "Mode required." });
+    if (!Array.isArray(calls) || calls.length === 0)
+      return res.status(400).json({ ok: false, message: "At least 1 call must be selected." });
 
     const db = await getDb();
     const payments = db.collection("payments");
+    const forwardedCalls = db.collection("forwarded_calls");
 
     const techId = ObjectId.isValid(user.id) ? new ObjectId(user.id) : user.id;
 
     const numOnline = Number(onlineAmount) || 0;
     const numCash = Number(cashAmount) || 0;
 
-    // ---------------- DAY KEY ----------------
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const dayKey = today.toISOString().slice(0, 10);
 
-    // ---------------- PREP CALLS ARRAY ----------------
     const callArray = calls.map((c) => ({
       callId: c.callId ? (ObjectId.isValid(c.callId) ? new ObjectId(c.callId) : c.callId) : null,
       clientName: c.clientName || "",
@@ -53,17 +43,15 @@ async function handler(req, res, user) {
       cashAmount: Number(c.cashAmount) || 0,
     }));
 
-    // ---------------- UNIQUE FINGERPRINT (STRONGER) ----------------
     const fingerprint = {
       techId,
       receiver,
       dayKey,
       onlineAmount: numOnline,
       cashAmount: numCash,
-      callsCount: callArray.length,       // 🔥 अब calls भी uniqueness में शामिल
+      callsCount: callArray.length,
     };
 
-    // ---------------- PAYMENT DOC ----------------
     const paymentDoc = {
       techId,
       techUsername: user.username,
@@ -74,15 +62,30 @@ async function handler(req, res, user) {
       receiverSignature: receiverSignature || null,
       dayKey,
       createdAt: new Date(),
-      calls: callArray,   // 🔥 FULL CALL BREAKDOWN SAVED HERE
+      calls: callArray,
     };
 
-    // ---------------- UPSERT ----------------
     const result = await payments.updateOne(
       fingerprint,
       { $setOnInsert: paymentDoc },
       { upsert: true }
     );
+
+    // ⭐ SUPER FAST PAYMENT STATUS UPDATE USING BULK WRITE ⭐
+    if (result.upsertedCount === 1) {
+      const bulkOps = callArray
+        .filter((c) => c.callId)
+        .map((c) => ({
+          updateOne: {
+            filter: { _id: c.callId },
+            update: { $set: { paymentStatus: "Paid" } }
+          }
+        }));
+
+      if (bulkOps.length > 0) {
+        await forwardedCalls.bulkWrite(bulkOps, { ordered: false });
+      }
+    }
 
     res.setHeader("Cache-Control", "private, no-store");
 
@@ -101,7 +104,6 @@ async function handler(req, res, user) {
 
   } catch (error) {
     console.error("🔥 Payment Error:", error);
-
     return res.status(500).json({
       ok: false,
       message: "Server error: Unable to save payment",
@@ -110,21 +112,3 @@ async function handler(req, res, user) {
 }
 
 export default requireRole("technician")(handler);
-
-/*
-============================================================
-🔥 REQUIRED INDEXES (RUN ONCE IN MONGO)
-============================================================
-
-// Calls-count based fingerprint → safe & unique
-db.payments.createIndex(
-  { techId: 1, receiver: 1, dayKey: 1, onlineAmount: 1, cashAmount: 1, callsCount: 1 },
-  { unique: true, name: "unique_payment_fingerprint" }
-);
-
-// Date speed index
-db.payments.createIndex({ techId: 1, createdAt: -1 });
-
-// Fast call lookup
-db.payments.createIndex({ "calls.callId": 1 });
-*/
