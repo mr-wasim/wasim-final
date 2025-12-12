@@ -86,15 +86,15 @@ export default function Header({
       { href: "/admin/forms", label: "Service Forms", icon: <FiFileText /> },
 
       // Forward Call (Best Icon)
-      { href: "/admin/forward", label: "Forward Call", icon: <FiPhoneForwarded /> },
+      { href: "/admin/forward", label: "New Call Assign", icon: <FiPhoneForwarded /> },
 
       // Forwarded Calls
-      { href: "/admin/forwarded", label: "Forwarded Calls", icon: <FiArrowRight /> },
+      { href: "/admin/forwarded", label: "All Customers", icon: <FiUsers /> },
 
       // Edit Calls – EDIT ICON
       { href: "/admin/all-calls", label: "Edit Calls", icon: <FiEdit /> },
 
-      { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
+      // { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
 
       // Technician Calls – TECHNICIAN ICON
       { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiUserCheck /> },
