@@ -1,130 +1,149 @@
+// pages/admin/index.js
 import Header from "../../components/Header";
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useState, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
+
 import {
-  LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from "recharts";
 
-// 🔥 Firebase Imports
+// Firebase Notifications
 import { db } from "../../lib/firebase";
-import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, limit } from "firebase/firestore";
+
+// Premium Popups
+import TechnicianPopup from "../../components/admin/TechnicianPopup";
+import FormsPopup from "../../components/admin/FormsPopup";
+import ForwardedPopup from "../../components/admin/ForwardedPopup";
+import PaymentPopup from "../../components/admin/PaymentPopup";
 
 export default function AdminHome() {
+
+  // STATES
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [notifications, setNotifications] = useState([]);
 
+  // POPUPS
+  const [openTech, setOpenTech] = useState(false);
+  const [openForms, setOpenForms] = useState(false);
+  const [openForwarded, setOpenForwarded] = useState(false);
+  const [openPayments, setOpenPayments] = useState(false);
+
+  // FAST FETCH + SUPER OPTIMIZED
   useEffect(() => {
     (async () => {
-      const me = await fetch("/api/auth/me");
-      if (me.ok) {
+      try {
+        const me = await fetch("/api/auth/me");
+        if (!me.ok) return (window.location.href = "/login");
+
         const u = await me.json();
-        if (u.role !== "admin") {
-          window.location.href = "/login";
-          return;
-        }
+        if (u.role !== "admin") return (window.location.href = "/login");
         setUser(u);
+
+        // Fetch summary FAST
+        const [sum] = await Promise.all([
+          fetch("/api/admin/summary").then((r) => r.json())
+        ]);
+
+        setStats(sum);
+
+        // Weekly data (static or dynamic)
+        setChartData([
+          { name: "Mon", calls: 12, forms: 5 },
+          { name: "Tue", calls: 21, forms: 7 },
+          { name: "Wed", calls: 17, forms: 6 },
+          { name: "Thu", calls: 33, forms: 10 },
+          { name: "Fri", calls: 28, forms: 9 },
+          { name: "Sat", calls: 15, forms: 4 },
+        ]);
+      } catch (e) {
+        console.log(e);
+        toast.error("Something went wrong");
       }
-
-      const r = await fetch("/api/admin/summary");
-      const d = await r.json();
-      setStats(d);
-
-      // Demo Chart Data
-      setChartData([
-        { name: "Mon", calls: 30, forms: 12 },
-        { name: "Tue", calls: 45, forms: 22 },
-        { name: "Wed", calls: 40, forms: 18 },
-        { name: "Thu", calls: 60, forms: 28 },
-        { name: "Fri", calls: 35, forms: 14 },
-        { name: "Sat", calls: 25, forms: 10 },
-      ]);
     })();
   }, []);
 
-  // 🔥 Real-Time Notification Listener
+  // NOTIFICATION LISTENER (Ultra optimized)
   useEffect(() => {
     if (!user) return;
 
     const q = query(
       collection(db, "notifications"),
       where("to", "==", "admin"),
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc"),
+      limit(20)
     );
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const unsub = onSnapshot(q, (snap) => {
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-      // check for new notifications only
       if (data.length > notifications.length) {
-        const newNoti = data[0];
-        toast.success(`🔔 ${newNoti.message || "New Notification"}`);
-        const audio = new Audio("/notify.mp3");
-        audio.play().catch(() => {});
+        const newest = data[0];
+        toast.success(`🔔 ${newest.message}`);
+        new Audio("/notify.mp3").play().catch(() => {});
       }
 
       setNotifications(data);
     });
 
     return () => unsub();
-  }, [user, notifications]);
+  }, [user, notifications.length]);
 
-  const COLORS = ["#2563eb", "#16a34a", "#facc15", "#ef4444"];
+  const COLORS = ["#3b82f6", "#10b981", "#facc15", "#ef4444"];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-100">
+    <div className="min-h-screen bg-gradient-to-br from-[#eef2ff] via-white to-[#dbeafe]">
+
       <Header user={user} />
 
       <main className="max-w-7xl mx-auto p-6 space-y-8">
-        {/* === DASHBOARD TITLE === */}
+
+        {/* Dashboard Title */}
         <motion.h1
-          className="text-3xl font-extrabold text-gray-800 mb-4 flex items-center justify-between"
-          initial={{ opacity: 0, y: -10 }}
+          className="text-4xl font-bold text-gray-800 tracking-tight flex items-center justify-between"
+          initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          <span>Admin Dashboard</span>
-
-          {/* 🔔 Notification Count */}
-          <span className="bg-red-500 text-white px-3 py-1 rounded-full text-sm shadow">
-            {notifications.length} New
-          </span>
+          Admin Dashboard
         </motion.h1>
 
-        {/* === STATS CARDS === */}
+        {/* Stats Section with glass effect */}
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {stats ? (
-            <>
-              <StatCard title="Technicians" value={stats.techs} color="blue" />
-              <StatCard title="Forms Submitted" value={stats.forms} color="green" />
-              <StatCard title="Forwarded Calls" value={stats.calls} color="yellow" />
-              <StatCard title="Total Payments" value={`₹${stats.totalPayments}`} color="purple" />
-            </>
-          ) : (
-            Array.from({ length: 4 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-28 bg-gray-200 animate-pulse rounded-2xl"
-              ></div>
-            ))
-          )}
+          {!stats
+            ? [...Array(4)].map((_, i) => (
+                <div
+                  key={i}
+                  className="h-28 bg-white/50 backdrop-blur-md shadow animate-pulse rounded-2xl"
+                ></div>
+              ))
+            : (
+              <>
+                <StatCard title="Technicians" value={stats.techs} color="blue" onClick={() => setOpenTech(true)} />
+                <StatCard title="Customer Forms" value={stats.forms} color="green" onClick={() => setOpenForms(true)} />
+                <StatCard title="Forwarded Calls" value={stats.calls} color="yellow" onClick={() => setOpenForwarded(true)} />
+                <StatCard title="Total Payments" value={`₹${stats.totalPayments}`} color="purple" onClick={() => setOpenPayments(true)} />
+              </>
+            )}
         </div>
 
-        {/* === GRAPH SECTION === */}
+        {/* Charts */}
         <div className="grid lg:grid-cols-2 gap-8">
-          <motion.div
-            className="bg-white p-6 rounded-2xl shadow-md border border-gray-100"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <h2 className="font-semibold text-gray-700 mb-3">Weekly Calls & Forms Trend</h2>
-            <ResponsiveContainer width="100%" height={250}>
+
+          {/* Line Chart */}
+          <motion.div className="bg-white/80 backdrop-blur-xl shadow-lg p-6 rounded-2xl border"
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+
+            <h2 className="font-semibold text-gray-700 mb-3">Weekly Calls & Forms</h2>
+
+            <ResponsiveContainer width="100%" height={260}>
               <LineChart data={chartData}>
-                <Line type="monotone" dataKey="calls" stroke="#2563eb" strokeWidth={3} />
-                <Line type="monotone" dataKey="forms" stroke="#16a34a" strokeWidth={3} />
-                <CartesianGrid stroke="#ccc" strokeDasharray="5 5" />
+                <Line type="monotone" dataKey="calls" stroke="#2563eb" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="forms" stroke="#16a34a" strokeWidth={3} dot={false} />
+                <CartesianGrid stroke="#e5e7eb" />
                 <XAxis dataKey="name" />
                 <YAxis />
                 <Tooltip />
@@ -132,15 +151,16 @@ export default function AdminHome() {
             </ResponsiveContainer>
           </motion.div>
 
-          <motion.div
-            className="bg-white p-6 rounded-2xl shadow-md border border-gray-100"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
+          {/* Pie chart */}
+          <motion.div className="bg-white/80 backdrop-blur-xl shadow-lg p-6 rounded-2xl border"
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
             <h2 className="font-semibold text-gray-700 mb-3">Performance Overview</h2>
-            <ResponsiveContainer width="100%" height={250}>
+
+            <ResponsiveContainer width="100%" height={260}>
               <PieChart>
                 <Pie
+                  outerRadius={90}
+                  label
                   dataKey="value"
                   data={[
                     { name: "Technicians", value: stats?.techs || 0 },
@@ -148,14 +168,8 @@ export default function AdminHome() {
                     { name: "Calls", value: stats?.calls || 0 },
                     { name: "Payments", value: stats?.totalPayments || 0 },
                   ]}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={90}
-                  label
                 >
-                  {COLORS.map((color, index) => (
-                    <Cell key={`cell-${index}`} fill={color} />
-                  ))}
+                  {COLORS.map((c, i) => <Cell key={i} fill={c} />)}
                 </Pie>
                 <Tooltip />
                 <Legend />
@@ -164,114 +178,116 @@ export default function AdminHome() {
           </motion.div>
         </div>
 
-        {/* === RECENT CALLS SECTION === */}
+        {/* Recent Forwarded Calls */}
         <motion.div
-          className="bg-white p-6 rounded-2xl shadow-md border border-gray-100"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
+          className="bg-white/80 backdrop-blur-xl p-6 rounded-2xl shadow-lg border"
+          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
         >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-700 text-lg">Recent Forwarded Calls</h2>
-            <button
-              onClick={() => toast.success("Refreshing data...")}
-              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-            >
+          <div className="flex justify-between">
+            <h2 className="font-semibold text-gray-700">Recent Forwarded Calls</h2>
+
+            <button className="text-blue-600 hover:text-blue-800" onClick={() => window.location.reload()}>
               Refresh
             </button>
           </div>
+
           <RecentForwarded />
         </motion.div>
       </main>
+
+      {/* POPUPS */}
+      <AnimatePresence>
+        {openTech && <TechnicianPopup onClose={() => setOpenTech(false)} />}
+        {openForms && <FormsPopup onClose={() => setOpenForms(false)} />}
+        {openForwarded && <ForwardedPopup onClose={() => setOpenForwarded(false)} />}
+        {openPayments && <PaymentPopup onClose={() => setOpenPayments(false)} />}
+      </AnimatePresence>
     </div>
   );
 }
 
-/* === STAT CARD COMPONENT === */
-function StatCard({ title, value, color }) {
-  const colorMap = {
-    blue: "from-blue-500 to-blue-600",
-    green: "from-green-500 to-green-600",
-    yellow: "from-yellow-400 to-yellow-500",
-    purple: "from-purple-500 to-purple-600",
+/* ---------------- STAT CARD ---------------- */
+function StatCard({ title, value, color, onClick }) {
+  const palette = {
+    blue: "from-blue-500 to-blue-700",
+    green: "from-green-500 to-green-700",
+    yellow: "from-yellow-400 to-yellow-600",
+    purple: "from-purple-500 to-purple-700",
   };
+
   return (
     <motion.div
-      className={`p-5 rounded-2xl shadow-md text-white bg-gradient-to-br ${colorMap[color]} relative overflow-hidden`}
-      whileHover={{ scale: 1.03 }}
-      transition={{ type: "spring", stiffness: 200 }}
+      onClick={onClick}
+      whileHover={{ scale: 1.07 }}
+      whileTap={{ scale: 0.95 }}
+      className={`p-5 rounded-2xl cursor-pointer text-white bg-gradient-to-br ${palette[color]} shadow-xl relative overflow-hidden`}
     >
-      <div className="text-sm font-medium opacity-90">{title}</div>
-      <div className="text-3xl font-bold mt-1">{value}</div>
-      <div className="absolute -bottom-5 -right-5 opacity-20 text-6xl font-bold">
+      <div className="text-sm opacity-90">{title}</div>
+      <div className="text-3xl font-bold">{value}</div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.5 }}
+        animate={{ opacity: 0.2, scale: 1 }}
+        className="absolute text-8xl -bottom-6 -right-4 font-bold select-none"
+      >
         +
-      </div>
+      </motion.div>
     </motion.div>
   );
 }
 
-/* === RECENT CALLS TABLE === */
+/* -------------- RECENT FORWARDED TABLE ---------------- */
 function RecentForwarded() {
-  const [items, setItems] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
+    (async () => {
       const r = await fetch("/api/admin/forwarded?limit=10");
       const d = await r.json();
-      if (!cancelled) setItems(d.items);
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
+      setItems(d.items || []);
+      setLoading(false);
+    })();
   }, []);
 
+  if (loading) {
+    return (
+      <div className="mt-4 space-y-3">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="h-10 bg-gray-200 animate-pulse rounded-md"></div>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto mt-4">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left bg-blue-50">
-            <th className="p-2 font-semibold text-gray-700">Client</th>
-            <th className="p-2 font-semibold text-gray-700">Phone</th>
-            <th className="p-2 font-semibold text-gray-700">Technician</th>
-            <th className="p-2 font-semibold text-gray-700">Status</th>
-            <th className="p-2 font-semibold text-gray-700">Date</th>
+          <tr className="bg-blue-100 text-left">
+            <th className="p-2">Client</th>
+            <th className="p-2">Phone</th>
+            <th className="p-2">Technician</th>
+            <th className="p-2">Status</th>
+            <th className="p-2">Date</th>
           </tr>
         </thead>
+
         <tbody>
-          {items ? (
-            items.map((it) => (
-              <tr
-                key={it._id}
-                className="border-t hover:bg-blue-50 transition-colors duration-200"
-              >
-                <td className="p-2">{it.clientName}</td>
-                <td className="p-2">{it.phone}</td>
-                <td className="p-2">{it.techName || "-"}</td>
-                <td
-                  className={`p-2 font-medium ${
-                    it.status === "Closed"
-                      ? "text-green-600"
-                      : it.status === "Pending"
-                      ? "text-yellow-500"
-                      : "text-gray-700"
-                  }`}
-                >
-                  {it.status}
-                </td>
-                <td className="p-2 text-gray-500">
-                  {new Date(it.createdAt).toLocaleString()}
-                </td>
-              </tr>
-            ))
-          ) : (
-            Array.from({ length: 5 }).map((_, i) => (
-              <tr key={i}>
-                <td colSpan="5" className="p-3">
-                  <div className="h-5 bg-gray-200 animate-pulse rounded"></div>
-                </td>
-              </tr>
-            ))
-          )}
+          {items.map((it) => (
+            <motion.tr
+              key={it._id}
+              className="border-t hover:bg-blue-50"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <td className="p-2">{it.clientName}</td>
+              <td className="p-2">{it.phone}</td>
+              <td className="p-2">{it.techName || "-"}</td>
+              <td className="p-2">{it.status}</td>
+              <td className="p-2">{new Date(it.createdAt).toLocaleString()}</td>
+            </motion.tr>
+          ))}
         </tbody>
       </table>
     </div>

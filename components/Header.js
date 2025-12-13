@@ -97,7 +97,7 @@ export default function Header({
       { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
 
       // Technician Calls – TECHNICIAN ICON
-      { href: "/admin/technician-calls", label: "Technician Calls", icon: <FiUserCheck /> },
+      { href: "/admin/technician-calls", label: "Technician Call Details", icon: <FiUserCheck /> },
 
       { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
       { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
