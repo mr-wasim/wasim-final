@@ -1,3 +1,4 @@
+// components/admin/PopupShell.js
 import { motion } from "framer-motion";
 
 export default function PopupShell({ title, onClose, children, width = "max-w-3xl" }) {
@@ -6,36 +7,58 @@ export default function PopupShell({ title, onClose, children, width = "max-w-3x
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[999] flex items-center justify-center 
-      bg-black/30 backdrop-blur-sm"
+      transition={{ duration: 0.12 }} 
+      className="fixed inset-0 bg-black/30 flex items-center justify-center z-[2000]"
+      style={{
+        backdropFilter: "blur(4px)",
+        WebkitBackdropFilter: "blur(4px)",
+        willChange: "opacity"
+      }}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.7, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.7, y: 20 }}
-        transition={{ type: "spring", stiffness: 120, damping: 12 }}
-        className={`w-[92%] ${width} bg-white/70 backdrop-blur-xl 
-        shadow-[0_8px_30px_rgb(0,0,0,0.12)] 
-        rounded-3xl border border-white/40 p-7`}
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        transition={{ duration: 0.12, ease: "easeOut" }}
+        className={`w-[92%] ${width} bg-white rounded-2xl shadow-2xl border border-gray-200 p-6`}
+        style={{
+          transform: "translateZ(0)",
+          willChange: "transform, opacity"
+        }}
       >
         {/* HEADER */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold text-gray-800 tracking-tight">
-            {title}
-          </h2>
+        <div className="flex justify-between items-center mb-5">
+          <h2 className="text-2xl font-semibold text-gray-800">{title}</h2>
 
           <button
             onClick={onClose}
-            className="text-gray-600 hover:text-red-500 transition text-lg"
+            className="text-gray-500 hover:text-red-500 text-2xl leading-none"
           >
             ✕
           </button>
         </div>
 
         {/* CONTENT */}
-        <div className="max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300">
+        <div
+          className="smooth-scroll"
+          style={{
+            maxHeight: "70vh",
+            overflowY: "auto",
+            paddingRight: "6px"
+          }}
+        >
           {children}
         </div>
+
+        <style jsx>{`
+          .smooth-scroll::-webkit-scrollbar {
+            width: 6px;
+          }
+          .smooth-scroll::-webkit-scrollbar-thumb {
+            background: rgba(150, 150, 150, 0.4);
+            border-radius: 10px;
+          }
+        `}</style>
       </motion.div>
     </motion.div>
   );

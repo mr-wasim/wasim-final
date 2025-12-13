@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import PopupShell from "./PopupShell"; // using the same premium shell
+import PopupShell from "./PopupShell";
 
 export default function FormsPopup({ onClose }) {
-  const [forms, setForms] = useState(null); // null = loading
+  const [forms, setForms] = useState(null);
   const [active, setActive] = useState(null);
 
-  // Filter states
+  // Filter system
   const [filterMode, setFilterMode] = useState("month");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -15,25 +15,34 @@ export default function FormsPopup({ onClose }) {
     load();
   }, []);
 
-  /** LOAD CUSTOMER FORMS */
+  /** LOAD CUSTOMER FORMS **/
   async function load(apply = false) {
     try {
       setForms(null);
 
       let url = "/api/admin/forms";
 
-      if (filterMode === "month") {
-        url += "?range=month";
-      }
-
-      if (filterMode === "custom" && apply && startDate && endDate) {
+      if (filterMode === "month") url += "?range=month";
+      if (filterMode === "custom" && apply && startDate && endDate)
         url += `?start=${startDate}&end=${endDate}`;
-      }
 
       const r = await fetch(url, { cache: "no-store" });
       const d = await r.json();
 
-      setForms(d.items || []);
+      // FIXED — Correct technician name mapping
+      const list = (d.items || []).map((x) => ({
+        ...x,
+
+        techName:
+          x.techUsername ||               // ⭐ most accurate
+          x.technician?.username ||       // if populated
+          x.technicianName ||             // alternative key
+          x.tech ||                       // fallback
+          x.assignedTech || 
+          "N/A",
+      }));
+
+      setForms(list);
     } catch (err) {
       console.error(err);
       setForms([]);
@@ -43,20 +52,15 @@ export default function FormsPopup({ onClose }) {
   return (
     <PopupShell title="Customer Forms" onClose={onClose} width="max-w-4xl">
 
-      {/* === FILTER BAR === */}
+      {/* FILTER BAR */}
       <div className="mb-5 p-3 bg-gray-50 rounded-2xl border">
 
-        {/* FILTER BUTTONS */}
         <div className="flex flex-wrap gap-3 mb-3">
           <button
-            onClick={() => {
-              setFilterMode("month");
-              load();
-            }}
+            onClick={() => { setFilterMode("month"); load(); }}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
-              filterMode === "month"
-                ? "bg-blue-600 text-white shadow"
-                : "bg-white border"
+              filterMode === "month" ? "bg-blue-600 text-white shadow"
+              : "bg-white border"
             }`}
           >
             This Month
@@ -74,7 +78,7 @@ export default function FormsPopup({ onClose }) {
           </button>
         </div>
 
-        {/* DATE RANGE FILTER */}
+        {/* DATE FILTER UI */}
         {filterMode === "custom" && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
 
@@ -102,14 +106,15 @@ export default function FormsPopup({ onClose }) {
                 Apply
               </button>
             </div>
+
           </div>
         )}
       </div>
 
-      {/* === LOADING SKELETON === */}
+      {/* LOADING SKELETON */}
       {forms === null && (
         <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
+          {[1,2,3].map(i => (
             <div key={i} className="p-4 bg-white rounded-2xl border shadow animate-pulse">
               <div className="h-4 bg-gray-300 w-1/3 rounded mb-2"></div>
               <div className="h-3 bg-gray-200 w-1/4 rounded"></div>
@@ -118,77 +123,100 @@ export default function FormsPopup({ onClose }) {
         </div>
       )}
 
-      {/* === EMPTY STATE === */}
+      {/* EMPTY */}
       {forms !== null && forms.length === 0 && (
         <div className="text-center py-10 text-gray-500 bg-yellow-50 border rounded-xl">
           No forms found.
         </div>
       )}
 
-      {/* === FORMS LIST === */}
+      {/* FORMS LIST */}
       {forms !== null && forms.length > 0 && (
         <div className="space-y-3">
-
           {forms.map((f) => (
             <motion.div
               key={f._id}
               onClick={() => setActive(f)}
-              whileHover={{ scale: 1.02 }}
+              whileHover={{ scale: 1.015 }}
               className="p-4 bg-white rounded-2xl shadow border cursor-pointer transition"
-              style={{ transform: "translateZ(0)" }}
             >
               <div className="flex justify-between">
+
                 <div>
                   <div className="text-lg font-semibold text-gray-800">
-                    {f.clientName || f.name || "Unknown Customer"}
+                    {f.clientName || f.name}
                   </div>
-                  <div className="text-sm text-gray-500">{f.phone || "N/A"}</div>
+                  <div className="text-sm text-gray-500">{f.phone}</div>
+
+                  {/* FIXED — technician name now correct */}
+                  <div className="text-xs text-gray-500 mt-1">
+                    Submitted by: <b>{f.techName}</b>
+                  </div>
                 </div>
 
                 <div className="text-right text-gray-400 text-sm">
                   {new Date(f.createdAt).toLocaleDateString()}
                 </div>
+
               </div>
             </motion.div>
           ))}
-
         </div>
       )}
 
-      {/* === FULL DETAILS POPUP === */}
+      {/* DETAILS POPUP */}
       <AnimatePresence>
         {active && (
           <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 40 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[1000]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur flex items-center justify-center z-[1000]"
           >
             <motion.div
-              initial={{ scale: 0.8 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.8 }}
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 15 }}
+              transition={{ duration: 0.18 }}
               className="bg-white w-[92%] max-w-xl rounded-2xl p-6 shadow-xl border"
             >
+              
               {/* HEADER */}
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-semibold text-gray-800">
-                  {active.clientName || active.name}
+                  {active.clientName}
                 </h3>
+
                 <button
-                  className="text-gray-600 hover:text-red-500 text-xl"
                   onClick={() => setActive(null)}
+                  className="text-gray-600 hover:text-red-500 text-xl"
                 >
                   ✕
                 </button>
               </div>
 
-              {/* DETAILS CONTENT */}
+              {/* DETAILS */}
               <div className="space-y-2 text-gray-700 text-sm">
+
                 <p><b>Phone:</b> {active.phone}</p>
                 <p><b>Address:</b> {active.address}</p>
                 <p><b>Service Type:</b> {active.type}</p>
                 <p><b>Created:</b> {new Date(active.createdAt).toLocaleString()}</p>
+
+                {/* FIXED Technician Field */}
+                <p><b>Technician:</b> {active.techName}</p>
+
+                {/* Signature */}
+                {active.signature && (
+                  <div className="mt-3">
+                    <b>Customer Signature:</b>
+                    <img
+                      src={active.signature}
+                      className="mt-2 w-full h-32 object-contain border p-2 rounded-xl"
+                      alt="signature"
+                    />
+                  </div>
+                )}
 
                 {active.extraNotes && (
                   <p><b>Notes:</b> {active.extraNotes}</p>
@@ -201,6 +229,7 @@ export default function FormsPopup({ onClose }) {
               >
                 Close
               </button>
+
             </motion.div>
           </motion.div>
         )}
