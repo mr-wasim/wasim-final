@@ -28,7 +28,6 @@ export default function TechnicianPopup({ onClose }) {
       const list = (d.data || []).map((t) => ({
         id: t._id,
         name: t.name || t.username || "Unknown",
-        phone: t.phone || "Not Available",
         totalCalls: t.totalCalls || 0,
         pending: t.pending || 0,
         closed: t.closed || 0,
