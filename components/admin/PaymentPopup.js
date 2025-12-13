@@ -5,7 +5,6 @@ import PopupShell from "./PopupShell";
 export default function PaymentPopup({ onClose }) {
   const [payments, setPayments] = useState(null);
   const [summary, setSummary] = useState({ online: 0, cash: 0, total: 0 });
-
   const [active, setActive] = useState(null);
 
   const [filterMode, setFilterMode] = useState("month");
@@ -13,19 +12,22 @@ export default function PaymentPopup({ onClose }) {
   const [end, setEnd] = useState("");
 
   useEffect(() => {
-    load();
+    applyFilter("month");
   }, []);
 
-  async function load(apply = false) {
+  /* ---------------- APPLY FILTER (FAST + CLEAN) ---------------- */
+  async function applyFilter(mode, customStart = "", customEnd = "") {
     setPayments(null);
 
     let url = "/api/admin/payments";
 
-    if (filterMode === "month") url += "?range=month";
-    if (filterMode === "today") url += "?range=today";
+    if (mode === "today") url += "?range=today";
+    if (mode === "month") url += "?range=month";
 
-    if (filterMode === "custom" && apply && start && end) {
-      url += `?range=custom&from=${start}&to=${end}`;
+    if (mode === "custom") {
+      if (!customStart || !customEnd) return;
+
+      url += `?range=custom&from=${customStart}&to=${customEnd}`;
     }
 
     const res = await fetch(url, { cache: "no-store" });
@@ -38,7 +40,7 @@ export default function PaymentPopup({ onClose }) {
   return (
     <PopupShell title="Payments Overview" onClose={onClose} width="max-w-4xl">
 
-      {/* SUMMARY BOX */}
+      {/* SUMMARY */}
       <div className="bg-blue-50 p-4 rounded-2xl border border-blue-200 mb-5">
         <div className="grid grid-cols-3 text-center">
           <div>
@@ -56,13 +58,16 @@ export default function PaymentPopup({ onClose }) {
         </div>
       </div>
 
-      {/* FILTERS */}
+      {/* FILTER SYSTEM */}
       <div className="p-3 bg-gray-50 rounded-2xl border mb-5">
-        <div className="flex flex-wrap gap-3 mb-3">
 
+        <div className="flex flex-wrap gap-3 mb-3">
           <button
-            onClick={() => { setFilterMode("month"); load(); }}
-            className={`px-4 py-2 rounded-xl font-medium ${
+            onClick={() => {
+              setFilterMode("month");
+              applyFilter("month");
+            }}
+            className={`px-4 py-2 rounded-xl ${
               filterMode === "month" ? "bg-blue-600 text-white" : "bg-white border"
             }`}
           >
@@ -70,8 +75,11 @@ export default function PaymentPopup({ onClose }) {
           </button>
 
           <button
-            onClick={() => { setFilterMode("today"); load(); }}
-            className={`px-4 py-2 rounded-xl font-medium ${
+            onClick={() => {
+              setFilterMode("today");
+              applyFilter("today");
+            }}
+            className={`px-4 py-2 rounded-xl ${
               filterMode === "today" ? "bg-blue-600 text-white" : "bg-white border"
             }`}
           >
@@ -80,7 +88,7 @@ export default function PaymentPopup({ onClose }) {
 
           <button
             onClick={() => setFilterMode("custom")}
-            className={`px-4 py-2 rounded-xl font-medium ${
+            className={`px-4 py-2 rounded-xl ${
               filterMode === "custom" ? "bg-blue-600 text-white" : "bg-white border"
             }`}
           >
@@ -88,8 +96,10 @@ export default function PaymentPopup({ onClose }) {
           </button>
         </div>
 
+        {/* CUSTOM DATE FILTER */}
         {filterMode === "custom" && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            
             <input
               type="date"
               value={start}
@@ -106,8 +116,9 @@ export default function PaymentPopup({ onClose }) {
                 onChange={(e) => setEnd(e.target.value)}
                 className="p-2 rounded-xl border bg-white w-full"
               />
+
               <button
-                onClick={() => load(true)}
+                onClick={() => applyFilter("custom", start, end)}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-white"
               >
                 Apply
@@ -117,19 +128,19 @@ export default function PaymentPopup({ onClose }) {
         )}
       </div>
 
-      {/* LOADING SKELETON */}
+      {/* LOADING */}
       {payments === null && (
         <div className="space-y-3">
           {[1,2,3].map(i => (
             <div key={i} className="p-4 bg-white rounded-xl border shadow animate-pulse">
-              <div className="h-4 bg-gray-300 rounded w-1/3 mb-2"></div>
-              <div className="h-3 bg-gray-200 rounded w-1/4"></div>
+              <div className="h-4 bg-gray-300 w-1/3 mb-2"></div>
+              <div className="h-3 bg-gray-200 w-1/4"></div>
             </div>
           ))}
         </div>
       )}
 
-      {/* NO DATA */}
+      {/* EMPTY */}
       {payments !== null && payments.length === 0 && (
         <div className="p-6 text-center bg-yellow-50 border rounded-xl text-gray-600">
           No payments found.
@@ -150,6 +161,7 @@ export default function PaymentPopup({ onClose }) {
                 className="p-5 bg-white rounded-2xl border shadow hover:border-blue-400 cursor-pointer"
               >
                 <div className="flex justify-between">
+
                   <div>
                     <div className="font-semibold text-lg">{p.techUsername}</div>
                     <div className="text-sm text-gray-500">Paying Name: {p.receiver}</div>
@@ -162,6 +174,7 @@ export default function PaymentPopup({ onClose }) {
                       {new Date(p.createdAt).toLocaleString()}
                     </div>
                   </div>
+
                 </div>
 
                 <div className="mt-3 text-sm text-gray-700">
@@ -173,7 +186,7 @@ export default function PaymentPopup({ onClose }) {
         </div>
       )}
 
-      {/* DETAILED POPUP */}
+      {/* DETAILS POPUP */}
       <AnimatePresence>
         {active && (
           <motion.div
@@ -182,10 +195,10 @@ export default function PaymentPopup({ onClose }) {
           >
             <motion.div
               className="bg-white w-[92%] max-w-2xl rounded-2xl p-6 border shadow-xl"
-              initial={{ scale: 0.7 }} animate={{ scale: 1 }} exit={{ scale: 0.7 }}
+              initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}
             >
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">Payment Details</h3>
+                <h3 className="text-xl font-semibold">Payment Details</h3>
                 <button
                   onClick={() => setActive(null)}
                   className="text-gray-500 hover:text-red-500 text-xl"
@@ -198,8 +211,8 @@ export default function PaymentPopup({ onClose }) {
                 <p><b>Technician:</b> {active.techUsername}</p>
                 <p><b>Paying Name:</b> {active.receiver}</p>
                 <p><b>Mode:</b> {active.mode}</p>
-                <p><b>Total Online:</b> ₹{active.onlineAmount}</p>
-                <p><b>Total Cash:</b> ₹{active.cashAmount}</p>
+                <p><b>Online:</b> ₹{active.onlineAmount}</p>
+                <p><b>Cash:</b> ₹{active.cashAmount}</p>
               </div>
 
               <hr className="my-3" />
@@ -210,7 +223,7 @@ export default function PaymentPopup({ onClose }) {
                 {active.calls?.map((c, i) => (
                   <div key={i} className="p-3 bg-gray-50 rounded-xl border">
                     <div className="font-semibold">{c.clientName}</div>
-                    <div className="text-sm text-gray-600">{c.phone}</div>
+                    <div className="text-sm">{c.phone}</div>
                     <div className="text-sm">Service: {c.type}</div>
                     <div className="text-sm">Price: ₹{c.price}</div>
                     <div className="text-sm">Online: ₹{c.onlineAmount}</div>
@@ -220,16 +233,16 @@ export default function PaymentPopup({ onClose }) {
               </div>
 
               <button
-                className="mt-4 px-4 py-2 bg-red-500 text-white rounded-xl"
                 onClick={() => setActive(null)}
+                className="mt-4 bg-red-500 text-white px-4 py-2 rounded-xl"
               >
                 Close
               </button>
-
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
     </PopupShell>
   );
 }
