@@ -18,32 +18,45 @@ async function handler(req, res, user) {
   try {
     let { tab = "All Calls", page = 1 } = req.query;
 
+    // ---------------- VALIDATION ----------------
     tab = String(tab);
     if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
 
     page = parseInt(page, 10);
     if (Number.isNaN(page) || page < 1) page = 1;
 
+    // ---------------- DB ----------------
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
-    const paymentColl = db.collection("payments"); // ⭐ Payment records
+    const paymentColl = db.collection("payments");
 
+    // ---------------- TECH MATCH ----------------
     const techIds = [user.id];
     if (ObjectId.isValid(user.id)) techIds.push(new ObjectId(user.id));
 
     const match = { techId: { $in: techIds } };
 
+    // ---------------- TAB FILTER (SINGLE SOURCE) ----------------
     if (tab === "Today Calls") {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
       match.createdAt = { $gte: start };
-    } else if (["Pending", "Closed", "Canceled"].includes(tab)) {
-      match.status = tab;
+      match.status = { $ne: "Canceled" };
+    } else if (tab === "Pending") {
+      match.status = "Pending";
+    } else if (tab === "Closed") {
+      match.status = "Closed";
+    } else if (tab === "Canceled") {
+      match.status = "Canceled";
+    } else {
+      // All Calls (default)
+      match.status = { $ne: "Canceled" };
     }
 
+    // ---------------- PAGINATION ----------------
     const skip = (page - 1) * PAGE_SIZE;
 
-    const cursor = coll
+    const docs = await coll
       .find(match)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -62,33 +75,34 @@ async function handler(req, res, user) {
         timeZone: 1,
         notes: 1,
         paymentStatus: 1,
-      });
-
-    const docs = await cursor.toArray();
-
-    // ⭐⭐⭐ AUTO FIX: OLD PAYMENT STATUS UPDATE ⭐⭐⭐
-    for (const c of docs) {
-      if (!c.paymentStatus || c.paymentStatus === "Pending") {
-        const paid = await paymentColl.findOne({
-          "calls.callId": String(c._id),
-        });
-
-        if (paid) {
-          await coll.updateOne(
-            { _id: c._id },
-            { $set: { paymentStatus: "Paid" } }
-          );
-          c.paymentStatus = "Paid";
-        } else {
-          c.paymentStatus = "Pending";
-        }
-      }
-    }
-    // ⭐⭐⭐ END AUTO FIX ⭐⭐⭐
+      })
+      .toArray();
 
     const hasMore = docs.length > PAGE_SIZE;
     const sliced = docs.slice(0, PAGE_SIZE);
 
+    // ---------------- PAYMENT STATUS (ULTRA FAST) ----------------
+    const callIds = sliced.map((c) => String(c._id));
+
+    let paidSet = new Set();
+    if (callIds.length > 0) {
+      const paidDocs = await paymentColl
+        .find(
+          { "calls.callId": { $in: callIds } },
+          { projection: { "calls.callId": 1 } }
+        )
+        .toArray();
+
+      for (const p of paidDocs) {
+        if (Array.isArray(p.calls)) {
+          for (const c of p.calls) {
+            if (c?.callId) paidSet.add(String(c.callId));
+          }
+        }
+      }
+    }
+
+    // ---------------- FINAL MAP ----------------
     const items = sliced.map((i) => ({
       _id: String(i._id),
 
@@ -109,9 +123,10 @@ async function handler(req, res, user) {
       timeZone: i.timeZone ?? "",
       notes: i.notes ?? "",
 
-      paymentStatus: i.paymentStatus === "Paid" ? "Paid" : "Pending",
+      paymentStatus: paidSet.has(String(i._id)) ? "Paid" : "Pending",
     }));
 
+    // ---------------- RESPONSE ----------------
     res.setHeader("Cache-Control", "private, no-store");
 
     return res.status(200).json({
@@ -123,9 +138,10 @@ async function handler(req, res, user) {
     });
   } catch (err) {
     console.error("forwarded-calls error:", err);
-    return res
-      .status(500)
-      .json({ success: false, error: "Internal Server Error" });
+    return res.status(500).json({
+      success: false,
+      error: "Internal Server Error",
+    });
   }
 }
 
