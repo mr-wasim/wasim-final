@@ -53,7 +53,8 @@ export default function TechHome() {
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
 
   useEffect(() => {
-    const updateSize = () => setCanvasWidth(window.innerWidth < 500 ? window.innerWidth - 40 : 500);
+    const updateSize = () =>
+      setCanvasWidth(window.innerWidth < 500 ? window.innerWidth - 40 : 500);
     updateSize();
     window.addEventListener("resize", updateSize);
     return () => window.removeEventListener("resize", updateSize);
@@ -63,13 +64,20 @@ export default function TechHome() {
   const loadCalls = async () => {
     try {
       setCallsLoading(true);
-      const params = new URLSearchParams({ tab: "All Calls", page: "1", pageSize: "50" });
-      const r = await fetch("/api/tech/my-calls?" + params.toString(), { cache: "no-store" });
+      const params = new URLSearchParams({
+        tab: "All Calls",
+        page: "1",
+        pageSize: "50",
+      });
+      const r = await fetch("/api/tech/my-calls?" + params.toString(), {
+        cache: "no-store",
+      });
       const d = await r.json();
       if (d?.success && Array.isArray(d.items)) {
         const mapped = d.items.map((i) => ({
           _id: i._id || i.id || "",
-          clientName: i.clientName ?? i.customerName ?? i.name ?? i.fullName ?? "",
+          clientName:
+            i.clientName ?? i.customerName ?? i.name ?? i.fullName ?? "",
           phone: i.phone ?? "",
           address: i.address ?? "",
           type: i.type ?? "",
@@ -88,7 +96,7 @@ export default function TechHome() {
     }
   };
 
-  // auth + initial load (unchanged)
+  // auth + initial load
   useEffect(() => {
     (async () => {
       try {
@@ -114,7 +122,9 @@ export default function TechHome() {
   }, []);
 
   function clearSig() {
-    try { sigRef.current?.clear(); } catch {}
+    try {
+      sigRef.current?.clear();
+    } catch {}
     setForm((p) => ({ ...p, signature: "" }));
   }
 
@@ -134,12 +144,6 @@ export default function TechHome() {
   }
 
   // ---------- camera strategy ----------
-  // We support two flows:
-  // 1) Mobile: use hidden <input type="file" accept="image/*" capture="environment"> to open system camera app
-  // 2) Desktop / fallback: open in-app camera modal using getUserMedia
-  //
-  // After capture (either route), image is added to stagedImages where user can mark Done ✓, Retake, Remove.
-
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -148,13 +152,12 @@ export default function TechHome() {
   const [cameraOn, setCameraOn] = useState(false);
   const [capturing, setCapturing] = useState(false);
 
-  // stagedImages: { id, dataUrl, blob (File/Blob), size, status: 'pending'|'done'|'uploaded', capturedAt }
+  // stagedImages: { id, dataUrl, blob, size, status: 'pending'|'uploading'|'uploaded'|'failed', serverUrl?, capturedAt }
   const [stagedImages, setStagedImages] = useState([]);
 
   const MAX_FILES = 100;
   const MAX_TOTAL_BYTES = 5 * 1024 * 1024; // 5MB
 
-  // util: detect mobile (simple)
   function isMobile() {
     if (typeof navigator === "undefined") return false;
     return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -165,7 +168,6 @@ export default function TechHome() {
     // if mobile -> use file input with capture (system camera app)
     if (isMobile()) {
       if (fileInputRef.current) {
-        // reset value to allow re-capture
         fileInputRef.current.value = "";
         fileInputRef.current.click();
       } else {
@@ -181,20 +183,30 @@ export default function TechHome() {
   async function onFileInputChange(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    // convert file to dataURL for preview + possibly compress
     try {
+      // quick checks before staging
+      if (!form.clientName || !form.address || !form.phone) {
+        toast.error(
+          "Fill Client Name, Address and Phone first — required before capturing."
+        );
+        return;
+      }
+
       const dataUrl = await fileToDataUrl(file);
-      // compress with canvas to try to keep size budget
-      const { dataUrl: compressed, blob, size } = await compressDataUrl(dataUrl, file.type);
-      addStagedImage(compressed, blob || file, size || (file.size || 0));
-      toast.success("Photo captured");
+      const { dataUrl: compressed, blob, size } = await compressDataUrl(
+        dataUrl,
+        file.type
+      );
+      const img = createStagedEntry(compressed, blob, size);
+      if (img) {
+        toast.success("Photo staged — it will upload when you press Submit.");
+      }
     } catch (err) {
       console.error("onFileInputChange error:", err);
       toast.error("Failed to process captured photo");
     }
   }
 
-  // file -> dataURL
   function fileToDataUrl(file) {
     return new Promise((res, rej) => {
       const fr = new FileReader();
@@ -204,9 +216,11 @@ export default function TechHome() {
     });
   }
 
-  // compress dataURL: return { dataUrl, blob, size }
-  async function compressDataUrl(dataUrl, mime = "image/jpeg", targetPerImage = 40 * 1024) {
-    // conservative: aim for small size but keep quality
+  async function compressDataUrl(
+    dataUrl,
+    mime = "image/jpeg",
+    targetPerImage = 40 * 1024
+  ) {
     try {
       const img = await loadImage(dataUrl);
       const maxWidth = 1400;
@@ -225,7 +239,6 @@ export default function TechHome() {
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
 
-      // try quality steps
       for (let q = 0.9; q >= 0.25; q -= 0.07) {
         const out = canvas.toDataURL(mime, q);
         const blob = await (await fetch(out)).blob();
@@ -233,12 +246,10 @@ export default function TechHome() {
           return { dataUrl: out, blob, size: blob.size };
         }
       }
-      // fallback last
       const out = canvas.toDataURL(mime, 0.25);
       const blob = await (await fetch(out)).blob();
       return { dataUrl: out, blob, size: blob.size };
     } catch (err) {
-      // if anything fails, return original
       const blob = await (await fetch(dataUrl)).blob();
       return { dataUrl, blob, size: blob.size };
     }
@@ -253,28 +264,28 @@ export default function TechHome() {
     });
   }
 
-  // add staged image
-  function addStagedImage(dataUrl, blob, size) {
+  // create staged entry and append to stagedImages (status = pending)
+  function createStagedEntry(dataUrl, blob, size) {
+    const used = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
     if (stagedImages.length >= MAX_FILES) {
       toast.error(`Maximum ${MAX_FILES} images allowed`);
-      return;
+      return null;
     }
-    const used = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
     if (used + (size || 0) > MAX_TOTAL_BYTES) {
       toast.error("Total images would exceed 5MB. Remove some first.");
-      return;
+      return null;
     }
-    setStagedImages((p) => [
-      ...p,
-      {
-        id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        dataUrl,
-        blob,
-        size,
-        status: "pending",
-        capturedAt: new Date().toISOString(),
-      },
-    ]);
+    const entry = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      dataUrl,
+      blob,
+      size,
+      status: "pending", // DO NOT auto-upload; wait till Submit
+      serverUrl: null,
+      capturedAt: new Date().toISOString(),
+    };
+    setStagedImages((p) => [...p, entry]);
+    return entry;
   }
 
   // ---------- In-app camera (desktop) ----------
@@ -284,7 +295,6 @@ export default function TechHome() {
       return;
     }
     try {
-      // request environment but fallback to default
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -321,13 +331,18 @@ export default function TechHome() {
     setCameraModalOpen(false);
   }
 
-  // capture frame from in-app camera
+  // capture frame from in-app camera and stage (do NOT auto-upload)
   async function captureFromInAppCamera() {
     if (!videoRef.current) return;
+    if (!form.clientName || !form.address || !form.phone) {
+      toast.error("Fill Client Name, Address and Phone first — required before capturing.");
+      return;
+    }
     if (stagedImages.length >= MAX_FILES) {
       toast.error(`Maximum ${MAX_FILES} images allowed`);
       return;
     }
+
     setCapturing(true);
     try {
       const video = videoRef.current;
@@ -349,104 +364,143 @@ export default function TechHome() {
       ctx.drawImage(video, 0, 0, w, h);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
       const { dataUrl: compressed, blob, size } = await compressDataUrl(dataUrl, "image/jpeg", 40 * 1024);
-      addStagedImage(compressed, blob, size);
-      toast.success("Photo captured");
+
+      const img = createStagedEntry(compressed, blob, size);
+      if (img) toast.success("Photo staged — it will upload when you press Submit.");
     } catch (err) {
       console.error("captureFromInAppCamera error:", err);
       toast.error("Capture failed");
     } finally {
       setCapturing(false);
-      // keep camera open so user can capture multiple; close only on user's action
+      // keep camera open for multiple captures if user wants
     }
   }
 
-  // retake logic: reopen camera route depending on environment
-  async function retakeImage(id) {
-    // remove the image and reopen capture flow
-    setStagedImages((p) => p.filter((s) => s.id !== id));
-    // attempt to open camera again
-    openCameraForCapture();
-  }
-
+  // remove and retry helpers
   function removeImage(id) {
     setStagedImages((p) => p.filter((s) => s.id !== id));
   }
 
-  function toggleDone(id) {
-    setStagedImages((prev) => prev.map((s) => (s.id === id ? { ...s, status: s.status === "done" ? "pending" : "done" } : s)));
+  // retryUpload will re-stage / set to pending so next Submit can upload it
+  async function retryUpload(id) {
+    const entry = stagedImages.find((s) => s.id === id);
+    if (!entry) return;
+    setStagedImages((p) => p.map((s) => (s.id === id ? { ...s, status: "pending" } : s)));
+    toast.success("Image set to pending. Press Submit to retry upload.");
   }
 
-  function markAllDone() {
-    setStagedImages((p) => p.map((s) => ({ ...s, status: "done" })));
-  }
-  function uncheckAll() {
-    setStagedImages((p) => p.map((s) => ({ ...s, status: "pending" })));
+  // helper: convert dataUrl blob -> File (with filename)
+  async function dataUrlToFile(dataUrl, filename = "photo.jpg") {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: blob.type || "image/jpeg" });
   }
 
-  // ---------- Submit: send only images marked 'done' as multipart files ----------
+  // ---------- Final submit: upload all staged images + signature in single request ----------
   async function submit(e) {
     e.preventDefault();
-
-    const imagesToUpload = stagedImages.filter((s) => s.status === "done");
-    if (imagesToUpload.length === 0) {
-      toast.error("Please mark at least one captured photo as Done ✓ before submitting (sticker upload is required).");
-      return;
-    }
-    const totalBytes = imagesToUpload.reduce((a,s) => a + (s.size || 0), 0);
-    if (totalBytes > MAX_TOTAL_BYTES) {
-      toast.error("Selected photos exceed 5MB total. Remove some images or reduce selection.");
-      return;
-    }
-
     try {
       setSubmitting(true);
 
-      const fd = new FormData();
-      fd.append("clientName", form.clientName);
-      fd.append("address", form.address);
-      fd.append("payment", String(form.payment || ""));
-      fd.append("phone", form.phone);
-      fd.append("status", form.status);
-      const signature = form.signature || sigRef.current?.toDataURL();
-      if (signature) fd.append("signature", signature);
-
-      // append each blob/file as 'stickers'
-      for (let i = 0; i < imagesToUpload.length; i++) {
-        const s = imagesToUpload[i];
-        // ensure we have a Blob/File
-        const blob = s.blob instanceof Blob ? s.blob : await (await fetch(s.dataUrl)).blob();
-        // create a filename preserving jpg extension
-        const filename = `sticker_${Date.now()}_${i}.jpg`;
-        const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
-        fd.append("stickers", file);
-      }
-
-      const r = await fetch("/api/service-forms/create", { method: "POST", body: fd });
-      const d = await r.json();
-      if (!r.ok) {
-        toast.error(d.message || d.error || "Upload failed");
+      // basic validation
+      if (!form.clientName || !form.address || !form.phone) {
+        toast.error("Please fill Client Name, Address and Phone.");
         setSubmitting(false);
         return;
       }
 
-      // on success: mark uploaded, show overlay, clear uploaded entries after small delay
-      setStagedImages((prev) => prev.map((s) => (s.status === "done" ? { ...s, status: "uploaded" } : s)));
+      // check total size
+      const totalBytes = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
+      if (totalBytes > MAX_TOTAL_BYTES) {
+        toast.error("Total staged images exceed 5MB. Remove some images before submit.");
+        setSubmitting(false);
+        return;
+      }
+
+      // set all pending/failed -> uploading
+      setStagedImages((p) => p.map((s) => (s.status === "uploaded" ? s : { ...s, status: "uploading" })));
+
+      // Build FormData
+      const fd = new FormData();
+      fd.append("clientName", form.clientName || "");
+      fd.append("address", form.address || "");
+      fd.append("payment", String(form.payment || ""));
+      fd.append("phone", form.phone || "");
+      fd.append("status", form.status || "Services Done");
+
+      // signature: prefer drawn signature; if none, empty string
+      const signatureDataUrl = form.signature || (sigRef.current ? sigRef.current.toDataURL() : "");
+      if (signatureDataUrl) {
+        // append signature as a field (servers usually accept base64 dataUrl)
+        fd.append("signature", signatureDataUrl);
+      }
+
+      // append every staged image as "stickers" (multiple)
+      for (let i = 0; i < stagedImages.length; i++) {
+        const s = stagedImages[i];
+        // if already uploaded, skip (but include? we skip)
+        if (s.status === "uploaded") continue;
+        try {
+          const file = s.blob instanceof Blob ? new File([s.blob], `sticker_${s.id}.jpg`, { type: s.blob.type || "image/jpeg" }) : await dataUrlToFile(s.dataUrl, `sticker_${s.id}.jpg`);
+          fd.append("stickers", file);
+        } catch (err) {
+          console.error("file append error", err);
+        }
+      }
+
+      // send to server
+      const res = await fetch("/api/tech/submit-form", {
+        method: "POST",
+        body: fd,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("submit error:", data);
+        // mark failed
+        setStagedImages((p) => p.map((s) => (s.status === "uploading" ? { ...s, status: "failed" } : s)));
+        toast.error(data.message || "Upload failed");
+        setSubmitting(false);
+        return;
+      }
+
+      // success: server returns saved stickers (array of urls) or at least success
+      const returnedStickers = data.stickers || data.stickersUploaded || [];
+      // Map server urls back to staged images (best-effort: by order)
+      let idx = 0;
+      setStagedImages((prev) =>
+        prev.map((s) => {
+          if (s.status === "uploaded") return s;
+          if (returnedStickers && returnedStickers.length > idx) {
+            const url = returnedStickers[idx];
+            idx++;
+            return { ...s, status: "uploaded", serverUrl: url || null };
+          } else {
+            // if server didn't return URLs per-image, mark uploaded
+            if (s.status === "uploading") {
+              return { ...s, status: "uploaded" };
+            }
+            return s;
+          }
+        })
+      );
+
       playSuccessSound();
-      toast.success("Form submitted successfully");
+      toast.success("Form submitted & photos uploaded");
+
       setShowSuccessOverlay(true);
-      setTimeout(() => setShowSuccessOverlay(false), 1500);
+      setTimeout(() => setShowSuccessOverlay(false), 1400);
 
-      setTimeout(() => {
-        setStagedImages((prev) => prev.filter((s) => s.status !== "uploaded"));
-      }, 900);
-
-      // reset form and close camera
+      // Clear form (keep uploaded images removed)
+      setStagedImages((prev) => prev.filter((s) => s.status !== "uploaded"));
       setForm({ clientName: "", address: "", payment: "", phone: "", status: "Services Done", signature: "" });
       setSelectedCall(null);
       clearSig();
       closeInAppCamera();
     } catch (err) {
       console.error("submit error:", err);
+      setStagedImages((p) => p.map((s) => (s.status === "uploading" ? { ...s, status: "failed" } : s)));
       toast.error("Submit failed");
     } finally {
       setSubmitting(false);
@@ -528,7 +582,7 @@ export default function TechHome() {
                   <div>
                     <div className="text-sm font-semibold text-slate-900">Upload Sticker</div>
                     <div className="text-xs text-slate-500">
-                      Tap Upload → camera app opens (mobile) or in-app camera (desktop). After capture, mark <span className="font-semibold">Done ✓</span> to select images for upload. Sticker upload is <span className="font-semibold">required</span>. Total ≤ 5MB. Max 100 images.
+                      Tap Upload → camera app opens (mobile) or in-app camera (desktop). Photo will be <strong>staged</strong> (pending) and uploaded only when you press Submit.
                     </div>
                   </div>
                   <div className="text-xs text-slate-500 text-right">
@@ -539,38 +593,43 @@ export default function TechHome() {
 
                 <div className="flex gap-2">
                   <button type="button" onClick={openCameraForCapture} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 bg-white text-sm">📷 Upload (Camera)</button>
-                  <button type="button" onClick={markAllDone} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 bg-emerald-600 text-white text-sm">Mark All Done</button>
-                  <button type="button" onClick={uncheckAll} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 bg-gray-200 text-sm">Uncheck All</button>
+                  <button type="button" onClick={() => { setStagedImages([]); }} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 bg-gray-200 text-sm">Clear All</button>
                 </div>
 
                 {/* thumbnails */}
                 <div className="grid grid-cols-3 gap-2 mt-2">
                   {stagedImages.map((s) => (
                     <div key={s.id} className="relative rounded-lg overflow-hidden border border-slate-200 bg-white">
-                      <img src={s.dataUrl} alt="staged" className="w-full h-24 object-cover" />
+                      <img src={s.serverUrl || s.dataUrl} alt="staged" className="w-full h-24 object-cover" />
                       <div className="p-1 text-[11px] text-slate-600 flex items-center justify-between">
                         <div className="truncate">Photo</div>
                         <div className="text-xs">{((s.size || 0)/1024).toFixed(1)} KB</div>
                       </div>
 
                       <div className="p-1 flex items-center gap-1">
-                        <label className="inline-flex items-center gap-1 text-xs">
-                          <input type="checkbox" checked={s.status === "done"} onChange={() => toggleDone(s.id)} />
-                          <span>Done</span>
-                        </label>
+                        <div className="text-xs font-medium text-slate-700">
+                          {s.status === "uploading" && "Uploading…"}
+                          {s.status === "uploaded" && "Uploaded"}
+                          {s.status === "failed" && "Failed"}
+                          {s.status === "pending" && "Pending"}
+                        </div>
 
-                        <button type="button" onClick={() => retakeImage(s.id)} className="text-xs ml-auto px-1 py-0.5 rounded bg-yellow-100">Retake</button>
-                        <button type="button" onClick={() => removeImage(s.id)} className="text-xs px-1 py-0.5 rounded bg-red-100">Remove</button>
+                        <div className="ml-auto flex gap-1">
+                          {s.status === "failed" && (
+                            <button type="button" onClick={() => retryUpload(s.id)} className="text-xs px-2 py-0.5 rounded bg-yellow-100">Retry</button>
+                          )}
+                          <button type="button" onClick={() => removeImage(s.id)} className="text-xs px-2 py-0.5 rounded bg-red-100">Remove</button>
+                        </div>
                       </div>
 
                       <div className="absolute top-1 left-1 bg-black/60 text-white text-[11px] px-1 rounded">
-                        {s.status === "uploaded" ? "Uploaded" : s.status === "done" ? "Done" : "Pending"}
+                        {s.status === "uploaded" ? "Uploaded" : s.status === "uploading" ? "Uploading" : s.status === "failed" ? "Failed" : "Pending"}
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {totalStagedBytes > MAX_TOTAL_BYTES && <div className="text-xs text-red-600 mt-1">Total staged images exceed 5MB. Remove or uncheck some images before upload.</div>}
+                {totalStagedBytes > MAX_TOTAL_BYTES && <div className="text-xs text-red-600 mt-1">Total staged images exceed 5MB. Remove some images before capture/upload.</div>}
               </div>
 
               {/* signature */}
