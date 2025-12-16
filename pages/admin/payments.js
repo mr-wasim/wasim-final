@@ -22,6 +22,7 @@ export default function Payments() {
   const abortRef = useRef(null);
 
   const [viewItem, setViewItem] = useState(null);
+  const [deleting, setDeleting] = useState(false); // <-- delete loading state
 
   // ---------------- HELPERS ----------------
   const formatDateTime = (d) => new Date(d).toLocaleString();
@@ -101,6 +102,7 @@ export default function Payments() {
   // Auto load when admin ready
   useEffect(() => {
     if (user) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // ---------------- CSV EXPORT ----------------
@@ -120,6 +122,61 @@ export default function Payments() {
     } catch (err) {
       console.error(err);
       toast.error("CSV export failed");
+    }
+  }
+
+  // ---------------- DELETE PAYMENT ----------------
+  async function handleDeleteCurrentPayment() {
+    if (!viewItem || !viewItem._id) {
+      toast.error("No payment selected");
+      return;
+    }
+
+    // Confirm with user
+    const ok = window.confirm(
+      "Are you sure you want to permanently delete this payment? This action cannot be undone."
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      // Try delete via DELETE endpoint. Adjust endpoint if your backend expects different path/query.
+      const r = await fetch(`/api/admin/payments/${encodeURIComponent(viewItem._id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      let respBody = null;
+      try {
+        respBody = await r.json();
+      } catch (e) {
+        // ignore JSON parse error
+      }
+
+      if (!r.ok) {
+        const msg = (respBody && respBody.error) || (respBody && respBody.message) || "Delete failed";
+        throw new Error(msg);
+      }
+
+      // Optimistically update UI: remove from items and adjust sums
+      setItems((prev) => prev.filter((it) => String(it._id) !== String(viewItem._id)));
+
+      const online = Number(viewItem.onlineAmount || 0);
+      const cash = Number(viewItem.cashAmount || 0);
+      const total = online + cash;
+      setSum((prev) => ({
+        online: Math.max(0, Number(prev.online || 0) - online),
+        cash: Math.max(0, Number(prev.cash || 0) - cash),
+        total: Math.max(0, Number(prev.total || 0) - total),
+      }));
+
+      toast.success("Payment deleted");
+      setViewItem(null);
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Delete failed");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -731,12 +788,24 @@ export default function Payments() {
                   Press <span className="font-mono">ESC</span> to close or click
                   outside the box.
                 </div>
-                <button
-                  onClick={() => setViewItem(null)}
-                  className="inline-flex items-center justify-center rounded-xl px-3 py-1.5 text-xs sm:text-sm font-semibold bg-slate-900 text-white hover:bg-black active:scale-95 transition"
-                >
-                  Close
-                </button>
+
+                <div className="flex items-center gap-2">
+                  {/* Delete button (keeps design consistent but shows danger) */}
+                  <button
+                    onClick={handleDeleteCurrentPayment}
+                    disabled={deleting}
+                    className="inline-flex items-center justify-center rounded-xl px-3 py-1.5 text-xs sm:text-sm font-semibold bg-red-600 text-white hover:bg-red-700 active:scale-95 transition disabled:opacity-60"
+                  >
+                    {deleting ? "Deleting..." : "Delete Payment"}
+                  </button>
+
+                  <button
+                    onClick={() => setViewItem(null)}
+                    className="inline-flex items-center justify-center rounded-xl px-3 py-1.5 text-xs sm:text-sm font-semibold bg-slate-900 text-white hover:bg-black active:scale-95 transition"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
