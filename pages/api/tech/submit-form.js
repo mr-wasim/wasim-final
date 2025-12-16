@@ -6,34 +6,37 @@ import { v4 as uuidv4 } from "uuid";
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 
 /*
-  endpoint: POST /api/tech/submit-form
-  - accepts multipart/form-data
-  - files field name: "stickers" (multiple)
-  - signature: optional data-url string in 'signature' text field
-  - if exact-duplicate exists for the same tech on same day, we APPEND new stickers to that doc
-    (prevents uploaded files from being deleted and avoids "pending" UX)
+  POST /api/tech/submit-form
+  - multipart/form-data
+  - field "stickers" => image files (multiple)
+  - field "signature" => optional data URL string (base64)
+  - returns { ok: true, id, stickers: [url,...] }
+  Designed for VPS (writes files to public/uploads/stickers)
 */
 
 export const config = {
   api: {
-    bodyParser: false,
+    bodyParser: false, // multer handles parsing
   },
 };
 
 const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads", "stickers");
 const MAX_FILES = 100;
-const MAX_TOTAL_BYTES = 5 * 1024 * 1024; // 5MB
-const PER_FILE_LIMIT = 2 * 1024 * 1024; // 2MB per file
+const MAX_TOTAL_BYTES = 5 * 1024 * 1024; // 5 MB total
+const PER_FILE_LIMIT = 2 * 1024 * 1024; // 2 MB per file
 
+// ensure folder exists
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  // best-effort permissions
+  try { fs.chmodSync(UPLOAD_DIR, 0o755); } catch (e) {}
 }
 
 const storage = multer.diskStorage({
-  destination(req, file, cb) {
+  destination: function (req, file, cb) {
     cb(null, UPLOAD_DIR);
   },
-  filename(req, file, cb) {
+  filename: function (req, file, cb) {
     const ext = path.extname(file.originalname) || `.${(file.mimetype || "jpg").split("/")[1] || "jpg"}`;
     const name = `sticker_${Date.now()}_${uuidv4()}${ext}`;
     cb(null, name);
@@ -76,24 +79,24 @@ function normalizeText(s) {
 }
 
 async function handler(req, res, user) {
-  if (req.method !== "POST") return res.status(405).end();
+  if (req.method !== "POST") return res.status(405).json({ ok: false, message: "Method not allowed" });
 
   // parse multipart
   try {
     await runMiddleware(req, res, upload.array("stickers", MAX_FILES));
   } catch (err) {
-    console.error("Multer parse error:", err);
-    let message = err && err.message ? err.message : "File upload error";
-    // common multer messages: "File too large"
-    return res.status(400).json({ ok: false, message });
+    console.error("Multer parse error:", err && err.message ? err.message : err);
+    const msg = err && err.message ? err.message : "File upload error";
+    return res.status(400).json({ ok: false, message: msg });
   }
 
+  // now handle form
   try {
     const { clientName, address, payment = 0, phone, status = "Pending", signature } = req.body || {};
 
-    // basic validation
+    // validation
     if (!clientName || !address || !phone) {
-      // cleanup any uploaded files to avoid orphans
+      // cleanup any uploaded files (safety)
       if (req.files && req.files.length) {
         for (const f of req.files) {
           try { fs.unlinkSync(f.path); } catch (e) {}
@@ -106,9 +109,10 @@ async function handler(req, res, user) {
       return res.status(400).json({ ok: false, message: "At least one sticker (photo) is required." });
     }
 
-    // total size check
+    // check combined size
     const totalBytes = req.files.reduce((acc, f) => acc + (f.size || 0), 0);
     if (totalBytes > MAX_TOTAL_BYTES) {
+      // delete files
       for (const f of req.files) {
         try { fs.unlinkSync(f.path); } catch (e) {}
       }
@@ -125,8 +129,10 @@ async function handler(req, res, user) {
     const addressNorm = normalizeText(address);
     const phoneNorm = normalizePhone(phone);
 
+    const techId = user && (user._id || user.id) ? String(user._id || user.id) : null;
+
     const filter = {
-      techId: (user && (user._id || user.id)) ? String(user._id || user.id) : null,
+      techId,
       dayKey,
       clientNameNorm,
       addressNorm,
@@ -134,12 +140,12 @@ async function handler(req, res, user) {
       payment: paymentNum,
     };
 
-    // saved stickers urls (public path)
+    // Build public URLs for saved files
     const savedStickers = req.files.map((f) => `/uploads/stickers/${path.basename(f.filename)}`);
 
-    // prepare document to insert if new
+    // document to insert if new
     const docOnInsert = {
-      techId: filter.techId,
+      techId,
       techUsername: user && user.username ? user.username : null,
       clientName: String(clientName).trim(),
       address: String(address).trim(),
@@ -147,7 +153,7 @@ async function handler(req, res, user) {
       payment: paymentNum,
       status: String(status || "Pending"),
       signature: signature || null,
-      stickers: savedStickers.slice(), // initial array
+      stickers: savedStickers.slice(),
       clientNameNorm,
       addressNorm,
       phoneNorm,
@@ -156,14 +162,12 @@ async function handler(req, res, user) {
       updatedAt: new Date(),
     };
 
-    // Try to upsert: if not exists create with stickers; if exists, append stickers (safe behavior)
-    // First try findOne to detect existing doc
+    // Try find existing (duplicate detection)
     const existing = await forms.findOne(filter);
 
     if (!existing) {
-      // insert new
+      // Insert new document
       const insertResult = await forms.insertOne(docOnInsert);
-      // success
       return res.status(200).json({
         ok: true,
         id: String(insertResult.insertedId),
@@ -172,13 +176,12 @@ async function handler(req, res, user) {
         totalBytes,
       });
     } else {
-      // existing: append new stickers to existing doc rather than deleting uploaded files
+      // Append new stickers to existing document
       const updated = await forms.findOneAndUpdate(
         { _id: existing._id },
         {
           $push: { stickers: { $each: savedStickers } },
           $set: {
-            // update signature if provided (overwrite), update status & updatedAt
             ...(signature ? { signature } : {}),
             status: String(status || existing.status || "Pending"),
             updatedAt: new Date(),
@@ -188,7 +191,6 @@ async function handler(req, res, user) {
       );
 
       const updatedDoc = updated.value;
-
       return res.status(200).json({
         ok: true,
         id: String(updatedDoc._id),

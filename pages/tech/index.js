@@ -25,7 +25,6 @@ function playSuccessSound() {
 }
 
 export default function TechHome() {
-  // ---------- auth & form state ----------
   const [user, setUser] = useState(null);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
@@ -43,7 +42,6 @@ export default function TechHome() {
   const sigRef = useRef();
   const [canvasWidth, setCanvasWidth] = useState(500);
 
-  // calls picker
   const [calls, setCalls] = useState([]);
   const [callsLoading, setCallsLoading] = useState(false);
   const [callModalOpen, setCallModalOpen] = useState(false);
@@ -60,7 +58,6 @@ export default function TechHome() {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
-  // load calls (unchanged)
   const loadCalls = async () => {
     try {
       setCallsLoading(true);
@@ -83,9 +80,6 @@ export default function TechHome() {
           type: i.type ?? "",
           price: i.price ?? 0,
           status: i.status ?? "Pending",
-          createdAt: i.createdAt ?? "",
-          timeZone: i.timeZone ?? "",
-          notes: i.notes ?? "",
         }));
         setCalls(mapped);
       }
@@ -96,7 +90,6 @@ export default function TechHome() {
     }
   };
 
-  // auth + initial load
   useEffect(() => {
     (async () => {
       try {
@@ -143,12 +136,11 @@ export default function TechHome() {
     });
   }
 
-  // ---------- camera strategy ----------
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
-  const [cameraModalOpen, setCameraModalOpen] = useState(false); // for desktop in-app camera
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [capturing, setCapturing] = useState(false);
 
@@ -163,9 +155,7 @@ export default function TechHome() {
     return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   }
 
-  // Open camera: decide route
   function openCameraForCapture() {
-    // if mobile -> use file input with capture (system camera app)
     if (isMobile()) {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -174,17 +164,14 @@ export default function TechHome() {
         toast.error("Camera not available");
       }
     } else {
-      // desktop -> open in-app camera modal
       openInAppCamera();
     }
   }
 
-  // hidden file input change handler (mobile route)
   async function onFileInputChange(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     try {
-      // quick checks before staging
       if (!form.clientName || !form.address || !form.phone) {
         toast.error(
           "Fill Client Name, Address and Phone first — required before capturing."
@@ -216,11 +203,7 @@ export default function TechHome() {
     });
   }
 
-  async function compressDataUrl(
-    dataUrl,
-    mime = "image/jpeg",
-    targetPerImage = 40 * 1024
-  ) {
+  async function compressDataUrl(dataUrl, mime = "image/jpeg", targetPerImage = 40 * 1024) {
     try {
       const img = await loadImage(dataUrl);
       const maxWidth = 1400;
@@ -264,7 +247,6 @@ export default function TechHome() {
     });
   }
 
-  // create staged entry and append to stagedImages (status = pending)
   function createStagedEntry(dataUrl, blob, size) {
     const used = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
     if (stagedImages.length >= MAX_FILES) {
@@ -280,7 +262,7 @@ export default function TechHome() {
       dataUrl,
       blob,
       size,
-      status: "pending", // DO NOT auto-upload; wait till Submit
+      status: "pending",
       serverUrl: null,
       capturedAt: new Date().toISOString(),
     };
@@ -288,7 +270,6 @@ export default function TechHome() {
     return entry;
   }
 
-  // ---------- In-app camera (desktop) ----------
   async function openInAppCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       toast.error("Camera not supported in this browser");
@@ -331,7 +312,6 @@ export default function TechHome() {
     setCameraModalOpen(false);
   }
 
-  // capture frame from in-app camera and stage (do NOT auto-upload)
   async function captureFromInAppCamera() {
     if (!videoRef.current) return;
     if (!form.clientName || !form.address || !form.phone) {
@@ -372,16 +352,13 @@ export default function TechHome() {
       toast.error("Capture failed");
     } finally {
       setCapturing(false);
-      // keep camera open for multiple captures if user wants
     }
   }
 
-  // remove and retry helpers
   function removeImage(id) {
     setStagedImages((p) => p.filter((s) => s.id !== id));
   }
 
-  // retryUpload will re-stage / set to pending so next Submit can upload it
   async function retryUpload(id) {
     const entry = stagedImages.find((s) => s.id === id);
     if (!entry) return;
@@ -389,11 +366,35 @@ export default function TechHome() {
     toast.success("Image set to pending. Press Submit to retry upload.");
   }
 
-  // helper: convert dataUrl blob -> File (with filename)
   async function dataUrlToFile(dataUrl, filename = "photo.jpg") {
     const res = await fetch(dataUrl);
     const blob = await res.blob();
     return new File([blob], filename, { type: blob.type || "image/jpeg" });
+  }
+
+  // verify URL reachability (HEAD then GET fallback)
+  async function verifyUrlReachable(url, timeout = 7000) {
+    try {
+      // convert relative to absolute
+      const finalUrl = url.startsWith("http") ? url : `${window.location.origin}${url}`;
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      // try HEAD first
+      try {
+        const r = await fetch(finalUrl, { method: "HEAD", signal: controller.signal });
+        clearTimeout(id);
+        return r.ok;
+      } catch (err) {
+        // fallback to GET
+      }
+      const controller2 = new AbortController();
+      const id2 = setTimeout(() => controller2.abort(), timeout);
+      const r2 = await fetch(finalUrl, { method: "GET", signal: controller2.signal });
+      clearTimeout(id2);
+      return r2.ok;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ---------- Final submit: upload all staged images + signature in single request ----------
@@ -402,14 +403,13 @@ export default function TechHome() {
     try {
       setSubmitting(true);
 
-      // basic validation
       if (!form.clientName || !form.address || !form.phone) {
         toast.error("Please fill Client Name, Address and Phone.");
         setSubmitting(false);
         return;
       }
 
-      // check total size
+      const toUpload = stagedImages.filter((s) => s.status !== "uploaded");
       const totalBytes = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
       if (totalBytes > MAX_TOTAL_BYTES) {
         toast.error("Total staged images exceed 5MB. Remove some images before submit.");
@@ -417,10 +417,15 @@ export default function TechHome() {
         return;
       }
 
-      // set all pending/failed -> uploading
+      if (toUpload.length === 0) {
+        toast.error("No new photos to upload. Either add photos or press Clear All.");
+        setSubmitting(false);
+        return;
+      }
+
+      // mark uploading locally
       setStagedImages((p) => p.map((s) => (s.status === "uploaded" ? s : { ...s, status: "uploading" })));
 
-      // Build FormData
       const fd = new FormData();
       fd.append("clientName", form.clientName || "");
       fd.append("address", form.address || "");
@@ -428,27 +433,22 @@ export default function TechHome() {
       fd.append("phone", form.phone || "");
       fd.append("status", form.status || "Services Done");
 
-      // signature: prefer drawn signature; if none, empty string
       const signatureDataUrl = form.signature || (sigRef.current ? sigRef.current.toDataURL() : "");
-      if (signatureDataUrl) {
-        // append signature as a field (servers usually accept base64 dataUrl)
-        fd.append("signature", signatureDataUrl);
-      }
+      if (signatureDataUrl) fd.append("signature", signatureDataUrl);
 
-      // append every staged image as "stickers" (multiple)
+      // append only pending/failed files in their current order (this order will be used server-side)
       for (let i = 0; i < stagedImages.length; i++) {
         const s = stagedImages[i];
-        // if already uploaded, skip (but include? we skip)
         if (s.status === "uploaded") continue;
         try {
           const file = s.blob instanceof Blob ? new File([s.blob], `sticker_${s.id}.jpg`, { type: s.blob.type || "image/jpeg" }) : await dataUrlToFile(s.dataUrl, `sticker_${s.id}.jpg`);
+          // also append a small mapping token so server preserves order (server ignores unknown fields; multer preserves file order)
           fd.append("stickers", file);
         } catch (err) {
           console.error("file append error", err);
         }
       }
 
-      // send to server
       const res = await fetch("/api/tech/submit-form", {
         method: "POST",
         body: fd,
@@ -465,39 +465,74 @@ export default function TechHome() {
         return;
       }
 
-      // success: server returns saved stickers (array of urls) or at least success
-      const returnedStickers = data.stickers || data.stickersUploaded || [];
-      // Map server urls back to staged images (best-effort: by order)
+      // Robust mapping of returned stickers -> the files we sent.
+      // Strategy:
+      // - server may return only newly saved stickers (length == n)
+      // - or server may return full stickers array (existing + new). In that case, newly added are expected to be at the end.
+      // - So we'll take the last N items where N = number of files we sent in this request (i.e., number of staged images that were not uploaded).
+      const numSent = toUpload.length;
+      const allReturned = Array.isArray(data.stickers) ? data.stickers.slice() : [];
+      let newReturned = [];
+      if (allReturned.length >= numSent && numSent > 0) {
+        newReturned = allReturned.slice(allReturned.length - numSent);
+      } else {
+        newReturned = allReturned.slice(0, numSent);
+      }
+
+      // verify each returned URL is reachable, and map to staged images in the same order we sent files
+      const mappedResults = [];
+      for (let i = 0; i < newReturned.length; i++) {
+        const url = newReturned[i];
+        const ok = await verifyUrlReachable(url).catch(() => false);
+        mappedResults.push({ url, ok });
+      }
+
+      // Update stagedImages: for each toUpload (in original ordering), assign the corresponding mappedResults item if ok, else mark failed.
       let idx = 0;
       setStagedImages((prev) =>
         prev.map((s) => {
           if (s.status === "uploaded") return s;
-          if (returnedStickers && returnedStickers.length > idx) {
-            const url = returnedStickers[idx];
-            idx++;
-            return { ...s, status: "uploaded", serverUrl: url || null };
+          // s was part of this upload batch
+          const mr = mappedResults[idx];
+          idx++;
+          if (mr && mr.ok) {
+            return { ...s, status: "uploaded", serverUrl: mr.url };
+          } else if (mr && !mr.ok) {
+            return { ...s, status: "failed" };
           } else {
-            // if server didn't return URLs per-image, mark uploaded
-            if (s.status === "uploading") {
-              return { ...s, status: "uploaded" };
-            }
-            return s;
+            // fallback: if server returned no url for this file, conservatively mark failed
+            return { ...s, status: "failed" };
           }
         })
       );
 
+      // count successes
+      const successCount = mappedResults.filter((r) => r.ok).length;
+      if (successCount === 0) {
+        toast.error("Upload finished but server didn't return reachable image URLs. Check server or filesystem permissions.");
+      } else {
+        toast.success(`Uploaded ${successCount} photo(s)`);
+      }
+
       playSuccessSound();
-      toast.success("Form submitted & photos uploaded");
 
-      setShowSuccessOverlay(true);
-      setTimeout(() => setShowSuccessOverlay(false), 1400);
+      // show overlay only if at least one succeeded
+      if (successCount > 0) {
+        setShowSuccessOverlay(true);
+        setTimeout(() => setShowSuccessOverlay(false), 1400);
+      }
 
-      // Clear form (keep uploaded images removed)
+      // remove uploaded ones from stagedImages
       setStagedImages((prev) => prev.filter((s) => s.status !== "uploaded"));
-      setForm({ clientName: "", address: "", payment: "", phone: "", status: "Services Done", signature: "" });
-      setSelectedCall(null);
-      clearSig();
-      closeInAppCamera();
+
+      // reset form only if at least one succeeded
+      if (successCount > 0) {
+        setForm({ clientName: "", address: "", payment: "", phone: "", status: "Services Done", signature: "" });
+        setSelectedCall(null);
+        clearSig();
+        closeInAppCamera();
+      }
+
     } catch (err) {
       console.error("submit error:", err);
       setStagedImages((p) => p.map((s) => (s.status === "uploading" ? { ...s, status: "failed" } : s)));
@@ -510,7 +545,6 @@ export default function TechHome() {
   const totalStagedBytes = stagedImages.reduce((a, s) => a + (s.size || 0), 0);
   const totalStagedKB = (totalStagedBytes / 1024).toFixed(1);
 
-  // ---------- Helper UI pieces ----------
   const Skeleton = () => (
     <div className="animate-pulse space-y-4 p-4">
       <div className="h-6 bg-gray-200 rounded w-1/3"></div>
@@ -529,7 +563,6 @@ export default function TechHome() {
     return calls.filter((c) => (c.clientName || "").toLowerCase().includes(q) || (c.phone || "").toLowerCase().includes(q) || (c.address || "").toLowerCase().includes(q));
   }, [calls, callSearch]);
 
-  // ---------- render ----------
   return (
     <div className="pb-16">
       <Header user={user} />
@@ -722,4 +755,3 @@ export default function TechHome() {
     </div>
   );
 }
-
