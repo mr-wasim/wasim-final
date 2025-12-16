@@ -722,3 +722,4 @@ export default function TechHome() {
     </div>
   );
 }
+
