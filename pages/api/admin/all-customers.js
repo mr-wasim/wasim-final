@@ -3,48 +3,85 @@ export const runtime = "nodejs";
 import { getDb, requireRole } from "../../../lib/api-helpers.js";
 
 async function handler(req, res, user) {
-  if (req.method !== "GET")
-    return res.status(405).json({ success: false, error: "Method not allowed" });
+  if (req.method !== "GET") {
+    return res
+      .status(405)
+      .json({ success: false, error: "Method not allowed" });
+  }
 
   try {
     let {
       page = "1",
       pageSize = "20",
+      q = "",
       search = "",
       from = "",
       to = "",
+      status = "",
+      technician = "",
     } = req.query;
+
+    // frontend q OR search dono support
+    const keyword = (q || search || "").trim();
 
     const db = await getDb();
     const coll = db.collection("forwarded_calls");
 
     const isExportAll = pageSize === "all";
 
+    /* ------------------------------------
+       MATCH FILTER (OPTIMIZED)
+    ------------------------------------ */
     const match = {};
 
-    if (search?.trim()) {
-      const q = search.trim();
+    // 🔍 SEARCH
+    if (keyword) {
       match.$or = [
-        { clientName: { $regex: q, $options: "i" } },
-        { customerName: { $regex: q, $options: "i" } },
-        { phone: { $regex: q, $options: "i" } },
-        { address: { $regex: q, $options: "i" } },
+        { clientName: { $regex: keyword, $options: "i" } },
+        { customerName: { $regex: keyword, $options: "i" } },
+        { phone: { $regex: keyword, $options: "i" } },
+        { address: { $regex: keyword, $options: "i" } },
       ];
     }
 
+    // 📅 DATE FROM
     if (from) {
       const d = new Date(from);
-      if (!isNaN(d)) match.createdAt = { ...(match.createdAt || {}), $gte: d };
+      if (!isNaN(d)) {
+        match.createdAt = { ...(match.createdAt || {}), $gte: d };
+      }
     }
 
+    // 📅 DATE TO
     if (to) {
       const d = new Date(`${to}T23:59:59.999`);
-      if (!isNaN(d)) match.createdAt = { ...(match.createdAt || {}), $lte: d };
+      if (!isNaN(d)) {
+        match.createdAt = { ...(match.createdAt || {}), $lte: d };
+      }
     }
 
+    // 📌 STATUS FILTER (Pending / Completed / Canceled etc.)
+    if (status) {
+      match.status = status;
+    }
+
+    // 👨‍🔧 TECHNICIAN FILTER
+    if (technician) {
+      match.$or = [
+        { techName: technician },
+        { technicianName: technician },
+        { techUsername: technician },
+      ];
+    }
+
+    /* ------------------------------------
+       TOTAL COUNT
+    ------------------------------------ */
     const total = await coll.countDocuments(match);
 
-    // ⭐ EXPORT MODE → FULL DATA, NO LIMIT
+    /* ------------------------------------
+       EXPORT ALL (NO LIMIT)
+    ------------------------------------ */
     if (isExportAll) {
       const fullItems = await coll
         .find(match)
@@ -58,6 +95,7 @@ async function handler(req, res, user) {
           type: 1,
           serviceType: 1,
           price: 1,
+          status: 1,
           createdAt: 1,
           serviceDate: 1,
           techName: 1,
@@ -75,9 +113,11 @@ async function handler(req, res, user) {
       });
     }
 
-    // ⭐ NORMAL PAGINATION (UI uses infinite scroll)
+    /* ------------------------------------
+       PAGINATION (INFINITE SCROLL)
+    ------------------------------------ */
     const pageNum = Math.max(parseInt(page) || 1, 1);
-    const limit = parseInt(pageSize) || 20;
+    const limit = Math.max(parseInt(pageSize) || 20, 1);
     const skip = (pageNum - 1) * limit;
 
     const items = await coll
@@ -94,6 +134,7 @@ async function handler(req, res, user) {
         type: 1,
         serviceType: 1,
         price: 1,
+        status: 1,
         createdAt: 1,
         serviceDate: 1,
         techName: 1,
@@ -102,7 +143,7 @@ async function handler(req, res, user) {
       })
       .toArray();
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       items,
       total,
@@ -110,7 +151,7 @@ async function handler(req, res, user) {
       nextPage: skip + items.length < total ? pageNum + 1 : null,
     });
   } catch (err) {
-    console.error(err);
+    console.error("FORWARDED API ERROR:", err);
     return res.status(500).json({
       success: false,
       error: "Internal Server Error",
