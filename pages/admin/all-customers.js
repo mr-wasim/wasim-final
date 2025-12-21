@@ -3,16 +3,17 @@
 /**
  * pages/admin/forwarded.js
  *
- * Technician-filter fixed:
- * - immediate load when technician selected (no duplicate debounce)
- * - client-side fallback filter if backend doesn't respect "technician" param
- * - shows all when technician="" (All Technicians)
+ * Production-ready admin "Forwarded Calls" page.
+ * - Robust technician loader (multiple endpoints + iterative fallback)
+ * - Client-side fallback filtering for technician if backend doesn't filter
+ * - Animated professional modal showing requested fields
+ * - Infinite scroll, CSV export, debounce, AbortController
  *
- * Full page: infinite scroll, export, abortcontroller, debounce, stable refs.
+ * Paste this file as-is.
  */
 
-import Header from "../../components/Header";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import Header from "../../components/Header";
 import {
   FiSearch,
   FiDownload,
@@ -20,13 +21,18 @@ import {
   FiUser,
   FiRefreshCw,
   FiChevronDown,
+  FiPhone,
+  FiMapPin,
+  FiTag,
+  FiClock,
+  FiDollarSign,
+  FiCheckCircle,
+  FiAlertCircle,
 } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 
-/* ---------------------------
-  Config & helpers
-----------------------------*/
 const PAGE_SIZE = 20;
+const ITERATIVE_PAGE_SIZE = 200;
 
 const statusColors = {
   Pending: "bg-yellow-100 text-yellow-700",
@@ -55,7 +61,16 @@ function formatDateTime(value) {
   });
 }
 
-/* small helpers */
+function formatCurrency(v) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (isNaN(n)) return String(v);
+  return n.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+}
+
+/* ---------------------------
+   Small UI helpers
+----------------------------*/
 function IconButton({ title, onClick, children, className = "" }) {
   return (
     <button
@@ -89,22 +104,20 @@ function EmptyState({ title = "No records", description = "" }) {
 }
 
 /* ---------------------------
-  MAIN
+   MAIN COMPONENT
 ----------------------------*/
 export default function ForwardedList() {
-  /* ---------- Auth/user ---------- */
   const [user, setUser] = useState(null);
 
-  /* ---------- Data ---------- */
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
 
-  /* ---------- Technicians ---------- */
   const [rawTechs, setRawTechs] = useState([]);
   const technicians = useMemo(() => {
-    const s = new Set();
+    // Map to preserve unique canonical display names (case-insensitive dedupe)
+    const map = new Map();
     rawTechs.forEach((t) => {
-      const name =
+      const candidate =
         (typeof t === "string" && t) ||
         t?.techName ||
         t?.technicianName ||
@@ -113,52 +126,46 @@ export default function ForwardedList() {
         t?.name ||
         t?.tech ||
         "";
-      if (name) s.add(String(name).trim());
+      const name = String(candidate).trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (!map.has(key)) map.set(key, name);
     });
-    return Array.from(s).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }, [rawTechs]);
 
-  /* ---------- Loading & pagination ---------- */
   const [loading, setLoading] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(1);
 
-  /* ---------- Filters (UI state) ---------- */
+  // Filters
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [technician, setTechnician] = useState("");
 
-  /* ---------- Modal ---------- */
+  // selected item for modal
   const [viewItem, setViewItem] = useState(null);
 
-  /* ---------- Refs ---------- */
+  // refs
   const observer = useRef(null);
   const debounceRef = useRef(null);
   const abortRef = useRef(null);
 
-  // stable refs for current filter values
+  // stable refs to read current filters
   const qRef = useRef("");
   const statusRef = useRef("");
   const technicianRef = useRef("");
   const isMountedRef = useRef(false);
-
-  // manual load flag to avoid duplicate debounce
   const manualLoadRef = useRef(false);
 
-  // sync refs with state
-  useEffect(() => {
-    qRef.current = q;
-  }, [q]);
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-  useEffect(() => {
-    technicianRef.current = technician;
-  }, [technician]);
+  // keep refs synced
+  useEffect(() => { qRef.current = q; }, [q]);
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { technicianRef.current = technician; }, [technician]);
 
   /* ---------------------------
-     Auth + initial load
+     AUTH + initial load
   ----------------------------*/
   useEffect(() => {
     let mounted = true;
@@ -172,8 +179,9 @@ export default function ForwardedList() {
         }
         if (!mounted) return;
         setUser(me);
-        // load techs and data
-        loadTechniciansStable();
+
+        // load technicians and initial data
+        await loadTechniciansStable();
         await loadDataStable({ pageNum: 1, reset: true });
         isMountedRef.current = true;
       } catch (err) {
@@ -184,99 +192,107 @@ export default function ForwardedList() {
 
     return () => {
       mounted = false;
-      try {
-        abortRef.current?.abort();
-      } catch {}
+      try { abortRef.current?.abort(); } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---------------------------
-     Technicians loader + fallback
+     Technician loading (robust)
+     tries multiple endpoints + iterative fallback
   ----------------------------*/
   async function loadTechniciansStable() {
     try {
-      const res = await fetch("/api/admin/technicians", { cache: "no-store" });
-      const data = await res.json().catch(() => null);
+      // 1) primary endpoint
+      let res = await fetch("/api/admin/technicians", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (Array.isArray(data) && data.length) { setRawTechs(data); return; }
+        if (data?.success && Array.isArray(data.items) && data.items.length) { setRawTechs(data.items); return; }
+        if (Array.isArray(data.technicians) && data.technicians.length) { setRawTechs(data.technicians); return; }
+      }
 
-      if (!data) {
-        await fallbackExtractTechsStable();
-        return;
+      // 2) try all=true variant
+      try {
+        res = await fetch("/api/admin/technicians?all=true", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (Array.isArray(data) && data.length) { setRawTechs(data); return; }
+        }
+      } catch (e) {
+        // ignore
       }
-      if (Array.isArray(data) && data.length) {
-        setRawTechs(data);
-        return;
+
+      // 3) try technician-calls endpoint (sometimes that returns technicians)
+      try {
+        res = await fetch("/api/admin/technician-calls", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          // can be { success:true, technicians: [...] } or plain array
+          if (Array.isArray(data)) { setRawTechs(data); return; }
+          if (data?.technicians && Array.isArray(data.technicians) && data.technicians.length) {
+            setRawTechs(data.technicians); return;
+          }
+          if (data?.items && Array.isArray(data.items) && data.items.length) {
+            setRawTechs(data.items); return;
+          }
+        }
+      } catch (e) {
+        // ignore
       }
-      if (data.success && Array.isArray(data.items) && data.items.length) {
-        setRawTechs(data.items);
-        return;
-      }
-      if (Array.isArray(data.technicians) && data.technicians.length) {
-        setRawTechs(data.technicians);
-        return;
-      }
-      await fallbackExtractTechsStable();
+
+      // 4) iterative fallback: walk forwarded pages and extract tech names
+      await fallbackIterativeExtractTechs();
     } catch (err) {
       console.error("loadTechniciansStable error:", err);
-      await fallbackExtractTechsStable();
+      await fallbackIterativeExtractTechs();
     }
   }
 
-  async function fallbackExtractTechsStable() {
+  async function fallbackIterativeExtractTechs() {
     try {
-      const res = await fetch("/api/admin/forwarded?pageSize=all", { cache: "no-store" });
-      if (!res.ok) {
-        setRawTechs([]);
-        return;
+      const names = new Map();
+      let p = 1;
+      let safety = 0;
+      while (true) {
+        safety += 1;
+        if (safety > 50) break; // safety guard
+        const res = await fetch(`/api/admin/forwarded?page=${p}&pageSize=${ITERATIVE_PAGE_SIZE}`, { cache: "no-store" });
+        if (!res.ok) break;
+        const d = await res.json();
+        const arr = Array.isArray(d.items) ? d.items : d.items ?? [];
+        arr.forEach((it) => {
+          const raw = it?.techName || it?.technicianName || it?.techUsername || it?.username || it?.tech || "";
+          const name = String(raw).trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (!names.has(key)) names.set(key, name);
+        });
+        if (!d.hasMore || arr.length === 0) break;
+        p += 1;
       }
-      const data = await res.json();
-      const arr = Array.isArray(data.items) ? data.items : data.items ?? [];
-      const names = [];
-      arr.forEach((it) => {
-        const name =
-          it?.techName ||
-          it?.technicianName ||
-          it?.techUsername ||
-          it?.username ||
-          it?.tech ||
-          "";
-        if (name) names.push(name);
-      });
-      setRawTechs(Array.from(new Set(names)));
+      setRawTechs(Array.from(names.values()));
     } catch (err) {
-      console.error("fallbackExtractTechsStable error:", err);
+      console.error("fallbackIterativeExtractTechs error:", err);
       setRawTechs([]);
     }
   }
 
-  /* ---------------------------
-     normalize tech name from item
-  ----------------------------*/
   function getTechNameFromItem(it) {
-    return (
-      (it && (it.techName || it.technicianName || it.techUsername || it.username || it.tech)) || ""
-    );
+    return (it && (it.techName || it.technicianName || it.techUsername || it.username || it.tech)) || "";
   }
 
   /* ---------------------------
-     Main data loader (stable)
-     - reads q/status/technician from refs
-     - applies client-side filter if technicianRef present
+     Data loader (stable)
   ----------------------------*/
   async function loadDataStable({ pageNum = 1, reset = false } = {}) {
-    // abort previous
-    try {
-      abortRef.current?.abort();
-    } catch {}
+    try { abortRef.current?.abort(); } catch {}
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
 
     if (loading && !reset) return;
     setLoading(true);
-    if (reset) {
-      setItems([]);
-      setHasMore(true);
-    }
+    if (reset) { setItems([]); setHasMore(true); }
 
     try {
       const params = new URLSearchParams();
@@ -289,7 +305,6 @@ export default function ForwardedList() {
 
       if (qVal) params.set("q", qVal);
       if (statusVal) params.set("status", statusVal);
-      // we set technician param — best-effort for backend
       if (techVal) params.set("technician", techVal);
 
       const url = `/api/admin/forwarded?${params.toString()}`;
@@ -303,19 +318,18 @@ export default function ForwardedList() {
       const d = await res.json();
       const serverItems = Array.isArray(d.items) ? d.items : d.items ?? [];
 
-      // client-side fallback filtering: if techVal present, filter results by tech name match
-      const filtered = techVal
+      // client-side fallback filter by technician (if backend didn't filter)
+      const filtered = technicianRef.current
         ? serverItems.filter((it) => {
             const name = String(getTechNameFromItem(it)).trim();
-            return name === techVal;
+            return name === technicianRef.current;
           })
         : serverItems;
 
       if (reset) setItems(filtered);
       else setItems((prev) => [...prev, ...filtered]);
 
-      setTotal(Number(d.total || 0));
-      // keep server's hasMore — we still need to fetch more pages if server says so
+      setTotal(Number(d.total || (reset ? filtered.length : items.length + filtered.length) || 0));
       setHasMore(Boolean(d.hasMore));
     } catch (err) {
       if (err.name === "AbortError") {
@@ -330,14 +344,11 @@ export default function ForwardedList() {
   }
 
   /* ---------------------------
-     Debounced filters effect
-     - skip on initial mount
-     - skip duplicate when manualLoadRef set (we call load immediately for technician)
+     Debounce filters effect
   ----------------------------*/
   useEffect(() => {
     if (!isMountedRef.current) return;
 
-    // if last change was manual load (select technician triggered immediate load), skip debounce call
     if (manualLoadRef.current) {
       manualLoadRef.current = false;
       return;
@@ -350,10 +361,10 @@ export default function ForwardedList() {
     }, 320);
 
     return () => clearTimeout(debounceRef.current);
-  }, [q, status, technician]); // loadDataStable not included intentionally
+  }, [q, status, technician]);
 
   /* ---------------------------
-     page change for infinite scroll
+     Page change -> infinite scroll
   ----------------------------*/
   useEffect(() => {
     if (page === 1) return;
@@ -361,7 +372,7 @@ export default function ForwardedList() {
   }, [page]);
 
   /* ---------------------------
-     infinite scroll observer
+     Intersection observer for infinite scroll
   ----------------------------*/
   const lastItemRef = (node) => {
     if (loading) return;
@@ -380,11 +391,10 @@ export default function ForwardedList() {
   };
 
   /* ---------------------------
-     CSV export
+     CSV export (pageSize=all)
   ----------------------------*/
   async function downloadAllStable(e) {
     if (e && e.preventDefault) e.preventDefault();
-
     try {
       const params = new URLSearchParams();
       params.set("pageSize", "all");
@@ -406,12 +416,9 @@ export default function ForwardedList() {
       const d = await res.json();
       const all = Array.isArray(d.items) ? d.items : d.items ?? [];
 
-      // If backend didn't filter by technician, apply client-side filter for CSV too
+      // client-side fallback if needed
       const finalAll = techVal
-        ? all.filter((it) => {
-            const name = String(getTechNameFromItem(it)).trim();
-            return name === techVal;
-          })
+        ? all.filter((it) => String(getTechNameFromItem(it)).trim() === techVal)
         : all;
 
       if (!finalAll.length) {
@@ -419,17 +426,7 @@ export default function ForwardedList() {
         return;
       }
 
-      const headers = [
-        "Client",
-        "Phone",
-        "Address",
-        "Service Type",
-        "Price",
-        "Status",
-        "Technician",
-        "Date",
-      ];
-
+      const headers = ["Client", "Phone", "Address", "Service Type", "Price", "Status", "Technician", "Date"];
       const rows = finalAll.map((c) => [
         c.clientName || c.customerName || "—",
         c.phone || "",
@@ -441,8 +438,7 @@ export default function ForwardedList() {
         c.createdAt ? new Date(c.createdAt).toLocaleString() : "",
       ]);
 
-      const csv =
-        [headers, ...rows].map((r) => r.map((c) => escapeCSV(c)).join(",")).join("\n");
+      const csv = [headers, ...rows].map((r) => r.map((c) => escapeCSV(c)).join(",")).join("\n");
 
       const blob = new Blob([csv], { type: "text/csv" });
       const urlObj = URL.createObjectURL(blob);
@@ -454,7 +450,7 @@ export default function ForwardedList() {
       a.remove();
       URL.revokeObjectURL(urlObj);
     } catch (err) {
-      console.error("downloadAllStable error:", err);
+      console.error("downloadAllStable error", err);
       alert("Export failed. Check console.");
     }
   }
@@ -471,25 +467,33 @@ export default function ForwardedList() {
     qRef.current = "";
     statusRef.current = "";
     technicianRef.current = "";
-    // ensure manual flag cleared
     manualLoadRef.current = false;
     loadDataStable({ pageNum: 1, reset: true });
   }
 
   /* ---------------------------
-     Technician select handler (immediate load + avoid duplicate debounce)
+     Technician change (immediate load)
   ----------------------------*/
   function handleTechnicianChange(e) {
     const val = e.target.value;
     setTechnician(val);
     technicianRef.current = val;
-    // mark manual to skip upcoming debounce effect
     manualLoadRef.current = true;
-    // clear any scheduled debounce
     clearTimeout(debounceRef.current);
-    // reset page and load immediately
     setPage(1);
     loadDataStable({ pageNum: 1, reset: true });
+  }
+
+  /* ---------------------------
+     Modal details layout
+  ----------------------------*/
+  function DetailsRow({ label, children }) {
+    return (
+      <div className="flex items-center gap-3">
+        <div className="w-28 text-xs text-slate-500">{label}</div>
+        <div className="text-sm text-slate-800">{children}</div>
+      </div>
+    );
   }
 
   /* ---------------------------
@@ -500,7 +504,7 @@ export default function ForwardedList() {
       <Header user={user} />
 
       <main className="max-w-7xl mx-auto p-4 space-y-4">
-        {/* header + actions */}
+        {/* header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center shadow">
@@ -509,8 +513,7 @@ export default function ForwardedList() {
             <div>
               <h1 className="text-xl font-bold text-slate-900">Forwarded Calls</h1>
               <p className="text-sm text-slate-500">
-                Showing <span className="font-semibold">{items.length}</span> • Total{" "}
-                <span className="font-semibold">{total}</span>
+                Showing <span className="font-semibold">{items.length}</span> • Total <span className="font-semibold">{total}</span>
               </p>
             </div>
           </div>
@@ -518,10 +521,7 @@ export default function ForwardedList() {
           <div className="flex gap-2">
             <IconButton
               title="Refresh"
-              onClick={() => {
-                setPage(1);
-                loadDataStable({ pageNum: 1, reset: true });
-              }}
+              onClick={() => { setPage(1); loadDataStable({ pageNum: 1, reset: true }); }}
               className="bg-white border text-slate-800"
             >
               <FiRefreshCw />
@@ -541,7 +541,6 @@ export default function ForwardedList() {
 
         {/* filters */}
         <section className="bg-white rounded-2xl p-4 shadow-sm border grid grid-cols-1 sm:grid-cols-4 gap-3">
-          {/* Search */}
           <div>
             <label className="text-xs font-semibold text-slate-500">Search</label>
             <div className="relative mt-1">
@@ -557,7 +556,6 @@ export default function ForwardedList() {
             </div>
           </div>
 
-          {/* Technician */}
           <div>
             <label className="text-xs font-semibold text-slate-500">Technician</label>
             <div className="relative mt-1">
@@ -584,7 +582,6 @@ export default function ForwardedList() {
             </p>
           </div>
 
-          {/* Status */}
           <div>
             <label className="text-xs font-semibold text-slate-500">Status</label>
             <div className="mt-1">
@@ -602,7 +599,6 @@ export default function ForwardedList() {
             </div>
           </div>
 
-          {/* Reset */}
           <div className="flex items-end">
             <button
               type="button"
@@ -622,13 +618,14 @@ export default function ForwardedList() {
             <EmptyState title="No records found" description="No forwarded calls match the selected filters." />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[720px]">
+              <table className="w-full text-sm min-w-[780px]">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-600">
                   <tr>
                     <th className="p-3 text-left">Client</th>
                     <th className="p-3">Phone</th>
                     <th className="p-3">Service</th>
                     <th className="p-3">Technician</th>
+                    <th className="p-3">Price</th>
                     <th className="p-3">Status</th>
                     <th className="p-3">Date</th>
                   </tr>
@@ -645,22 +642,29 @@ export default function ForwardedList() {
                         className="border-t hover:bg-indigo-50 cursor-pointer"
                       >
                         <td className="p-3 font-medium">{it.clientName || it.customerName || "—"}</td>
-                        <td className="p-3">{it.phone || "—"}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            <FiPhone className="text-slate-400" />
+                            {it.phone || "—"}
+                          </div>
+                        </td>
                         <td className="p-3">{it.type || it.serviceType || "—"}</td>
                         <td className="p-3 flex items-center gap-2">
                           <FiUser className="text-slate-400" />
                           {it.techName || it.technicianName || it.techUsername || "—"}
                         </td>
+                        <td className="p-3 font-semibold text-emerald-700">{formatCurrency(it.price)}</td>
                         <td className="p-3">
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                              statusColors[it.status] || "bg-slate-100 text-slate-700"
-                            }`}
-                          >
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[it.status] || "bg-slate-100 text-slate-700"}`}>
                             {it.status || "—"}
                           </span>
                         </td>
-                        <td className="p-3">{it.createdAt ? formatDateTime(it.createdAt) : "—"}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            <FiClock className="text-slate-400" />
+                            {it.createdAt ? formatDateTime(it.createdAt) : "—"}
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -687,30 +691,119 @@ export default function ForwardedList() {
               onClick={() => setViewItem(null)}
             />
             <motion.div
-              className="bg-white p-6 rounded-2xl max-w-lg w-full z-50"
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-xl w-full z-50 shadow-2xl ring-1 ring-slate-200 overflow-hidden"
+              initial={{ y: 30, opacity: 0, scale: 0.98 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 20, opacity: 0, scale: 0.98 }}
+              transition={{ type: "spring", stiffness: 300, damping: 28 }}
             >
-              <div className="flex justify-between items-start">
-                <h2 className="text-lg font-semibold mb-3">Customer Details</h2>
-                <button onClick={() => setViewItem(null)} className="text-slate-500">
-                  <FiX size={20} />
+              {/* header */}
+              <div className="flex items-center justify-between p-5 border-b">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-lg bg-indigo-600 text-white grid place-items-center text-lg font-semibold">
+                    {((viewItem.clientName || viewItem.customerName || "U")[0] || "").toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold">{viewItem.clientName || viewItem.customerName || "—"}</div>
+                    <div className="text-xs text-slate-500 mt-1">{viewItem.address || "Address not provided"}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <div className="text-xs text-slate-500">Price</div>
+                    <div className="text-lg font-semibold text-emerald-700">{formatCurrency(viewItem.price)}</div>
+                  </div>
+                  <button onClick={() => setViewItem(null)} className="rounded-full p-2 hover:bg-slate-100 transition" aria-label="Close">
+                    <FiX size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* body */}
+              <div className="p-6 grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50"><FiPhone className="text-slate-500" /></div>
+                      <div>
+                        <div className="text-xs text-slate-500">Number</div>
+                        <div className="text-sm text-slate-800">{viewItem.phone || "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50"><FiMapPin className="text-slate-500" /></div>
+                      <div>
+                        <div className="text-xs text-slate-500">Address</div>
+                        <div className="text-sm text-slate-800">{viewItem.address || "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50"><FiTag className="text-slate-500" /></div>
+                      <div>
+                        <div className="text-xs text-slate-500">Service Type</div>
+                        <div className="text-sm text-slate-800">{viewItem.type || viewItem.serviceType || "—"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50"><FiUser className="text-slate-500" /></div>
+                      <div>
+                        <div className="text-xs text-slate-500">Tech Name</div>
+                        <div className="text-sm text-slate-800">{viewItem.techName || viewItem.technicianName || viewItem.techUsername || "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50"><FiClock className="text-slate-500" /></div>
+                      <div>
+                        <div className="text-xs text-slate-500">Create Date</div>
+                        <div className="text-sm text-slate-800">{viewItem.createdAt ? formatDateTime(viewItem.createdAt) : "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-md bg-slate-50">
+                        {viewItem.status === "Completed" ? <FiCheckCircle className="text-green-600" /> : <FiAlertCircle className="text-yellow-600" />}
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Status</div>
+                        <div className="text-sm text-slate-800">
+                          <span className={`px-2 py-1 rounded-md text-xs font-semibold ${statusColors[viewItem.status] || "bg-slate-100 text-slate-700"}`}>
+                            {viewItem.status || "—"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* optional notes */}
+                {viewItem.notes || viewItem.remarks || viewItem.comment ? (
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Notes</div>
+                    <div className="text-sm text-slate-700 bg-slate-50 p-3 rounded-md">{viewItem.notes || viewItem.remarks || viewItem.comment}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* footer */}
+              <div className="p-5 border-t flex items-center justify-end gap-3">
+                <button onClick={() => setViewItem(null)} className="px-4 py-2 rounded-lg border text-sm">Close</button>
+                <button
+                  onClick={() => {
+                    if (!viewItem.phone) { alert("Phone number not available"); return; }
+                    const tel = String(viewItem.phone).replace(/\D/g, "");
+                    window.open(`https://wa.me/${tel}`, "_blank");
+                  }}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm flex items-center gap-2"
+                >
+                  Message
                 </button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2 text-sm">
-                <div><b>Name:</b> {viewItem.clientName || viewItem.customerName || "—"}</div>
-                <div><b>Phone:</b> {viewItem.phone || "—"}</div>
-                <div><b>Address:</b> {viewItem.address || "—"}</div>
-                <div><b>Service:</b> {viewItem.type || viewItem.serviceType || "—"}</div>
-                <div><b>Technician:</b> {viewItem.techName || viewItem.technicianName || viewItem.techUsername || "—"}</div>
-                <div><b>Status:</b> {viewItem.status || "—"}</div>
-                <div><b>Date:</b> {viewItem.createdAt ? formatDateTime(viewItem.createdAt) : "—"}</div>
-              </div>
-
-              <div className="mt-4">
-                <button onClick={() => setViewItem(null)} className="w-full bg-indigo-600 text-white py-2 rounded-xl">Close</button>
               </div>
             </motion.div>
           </div>
