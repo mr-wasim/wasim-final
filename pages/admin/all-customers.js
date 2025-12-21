@@ -3,11 +3,12 @@
 /**
  * pages/admin/forwarded.js
  *
- * Production-ready admin "Forwarded Calls" page.
- * - Robust technician loader (multiple endpoints + iterative fallback)
- * - Client-side fallback filtering for technician if backend doesn't filter
- * - Animated professional modal showing requested fields
- * - Infinite scroll, CSV export, debounce, AbortController
+ * Production-ready admin "Forwarded Calls" page (fixed + improvements).
+ * - Lifetime total calculation (tries count endpoints, falls back to iterative).
+ * - Infinite scroll to show lifetime data incrementally.
+ * - Export CSV robust: tries pageSize=all, falls back to iterative paging.
+ * - Modal on phones: width 75% (w-[75vw]) and height 60% (h-[60vh]).
+ * - Modal is draggable by its header (pointer/touch friendly), constrained to viewport.
  *
  * Paste this file as-is.
  */
@@ -110,7 +111,8 @@ export default function ForwardedList() {
   const [user, setUser] = useState(null);
 
   const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState(0); // lifetime total (best-effort)
+  const [visibleCount, setVisibleCount] = useState(0); // items.length mirrored for safer renders
 
   const [rawTechs, setRawTechs] = useState([]);
   const technicians = useMemo(() => {
@@ -159,10 +161,21 @@ export default function ForwardedList() {
   const isMountedRef = useRef(false);
   const manualLoadRef = useRef(false);
 
+  // drag refs/state for modal
+  const modalRef = useRef(null);
+  const headerDragRef = useRef(null);
+  const draggingRef = useRef(false);
+  const startPointer = useRef({ x: 0, y: 0 });
+  const startPos = useRef({ x: 0, y: 0 });
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+
   // keep refs synced
   useEffect(() => { qRef.current = q; }, [q]);
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { technicianRef.current = technician; }, [technician]);
+
+  // Mirror items length to avoid closure stale issues in setTotal logic
+  useEffect(() => setVisibleCount(items.length), [items]);
 
   /* ---------------------------
      AUTH + initial load
@@ -180,9 +193,11 @@ export default function ForwardedList() {
         if (!mounted) return;
         setUser(me);
 
-        // load technicians and initial data
+        // load technicians and initial data + total
         await loadTechniciansStable();
         await loadDataStable({ pageNum: 1, reset: true });
+        // compute lifetime total (best-effort)
+        await fetchTotalStable();
         isMountedRef.current = true;
       } catch (err) {
         console.error("AUTH ERROR:", err);
@@ -204,7 +219,7 @@ export default function ForwardedList() {
   async function loadTechniciansStable() {
     try {
       // 1) primary endpoint
-      let res = await fetch("/api/admin/technicians", { cache: "no-store" });
+      let res = await fetch("/api/admin/techs", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json().catch(() => null);
         if (Array.isArray(data) && data.length) { setRawTechs(data); return; }
@@ -214,7 +229,7 @@ export default function ForwardedList() {
 
       // 2) try all=true variant
       try {
-        res = await fetch("/api/admin/technicians?all=true", { cache: "no-store" });
+        res = await fetch("/api/admin/techs?all=true", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json().catch(() => null);
           if (Array.isArray(data) && data.length) { setRawTechs(data); return; }
@@ -283,6 +298,39 @@ export default function ForwardedList() {
   }
 
   /* ---------------------------
+     Helper: fetch many pages (iterative)
+     used by total calculation and export fallback
+  ----------------------------*/
+  async function fetchAllPagesIterative({ baseParams = {}, pageSize = ITERATIVE_PAGE_SIZE, signal = null, onChunk = null } = {}) {
+    const accum = [];
+    let p = 1;
+    let safety = 0;
+    while (true) {
+      safety += 1;
+      if (safety > 500) break; // huge safety guard
+      const params = new URLSearchParams(baseParams);
+      params.set("page", String(p));
+      params.set("pageSize", String(pageSize));
+      const url = `/api/admin/forwarded?${params.toString()}`;
+      const res = await fetch(url, { cache: "no-store", signal });
+      if (!res.ok) break;
+      const d = await res.json();
+      const arr = Array.isArray(d.items) ? d.items : d.items ?? [];
+      accum.push(...arr);
+      if (onChunk) {
+        try { onChunk(arr, d, p); } catch (e) { /* ignore */ }
+      }
+      // Determine if more:
+      const serverHasMore = d.hasMore;
+      if (Array.isArray(arr) && arr.length === 0) break;
+      if (serverHasMore === false) break;
+      if (Array.isArray(arr) && arr.length < pageSize) break;
+      p += 1;
+    }
+    return accum;
+  }
+
+  /* ---------------------------
      Data loader (stable)
   ----------------------------*/
   async function loadDataStable({ pageNum = 1, reset = false } = {}) {
@@ -329,8 +377,22 @@ export default function ForwardedList() {
       if (reset) setItems(filtered);
       else setItems((prev) => [...prev, ...filtered]);
 
-      setTotal(Number(d.total || (reset ? filtered.length : items.length + filtered.length) || 0));
-      setHasMore(Boolean(d.hasMore));
+      // total: prefer server-provided d.total, else try sensible fallback
+      if (typeof d.total === "number") {
+        setTotal(Number(d.total));
+      } else if (reset) {
+        // if server didn't give total, we attempt a separate total fetch but don't block the UI here.
+        // start a background total fetch (but awaited by caller when they need reliability).
+        fetchTotalStable().catch((e) => console.debug("background total fetch failed", e));
+      }
+
+      // hasMore detection: prioritize server flag; otherwise infer from page sizes
+      if (typeof d.hasMore === "boolean") {
+        setHasMore(Boolean(d.hasMore));
+      } else {
+        // if returned fewer than PAGE_SIZE -> no more
+        setHasMore(!(Array.isArray(serverItems) && serverItems.length < PAGE_SIZE));
+      }
     } catch (err) {
       if (err.name === "AbortError") {
         // ignore
@@ -358,6 +420,8 @@ export default function ForwardedList() {
     debounceRef.current = setTimeout(() => {
       setPage(1);
       loadDataStable({ pageNum: 1, reset: true });
+      // also refresh total for current filters
+      fetchTotalStable().catch((e) => console.debug("fetchTotalStable error", e));
     }, 320);
 
     return () => clearTimeout(debounceRef.current);
@@ -391,68 +455,110 @@ export default function ForwardedList() {
   };
 
   /* ---------------------------
-     CSV export (pageSize=all)
+     CSV export (pageSize=all) with robust fallback
   ----------------------------*/
   async function downloadAllStable(e) {
     if (e && e.preventDefault) e.preventDefault();
     try {
-      const params = new URLSearchParams();
-      params.set("pageSize", "all");
-
+      // Build base params from current filters
+      const params = {};
       const qVal = qRef.current?.trim();
       const statusVal = statusRef.current;
       const techVal = technicianRef.current;
 
-      if (qVal) params.set("q", qVal);
-      if (statusVal) params.set("status", statusVal);
-      if (techVal) params.set("technician", techVal);
+      if (qVal) params.q = qVal;
+      if (statusVal) params.status = statusVal;
+      if (techVal) params.technician = techVal;
 
-      const url = `/api/admin/forwarded?${params.toString()}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        const t = await res.text().catch(() => null);
-        throw new Error(t || "Export failed");
+      // First try server-side 'all' (many APIs support pageSize=all)
+      try {
+        const allParams = new URLSearchParams(params);
+        allParams.set("pageSize", "all");
+        const url = `/api/admin/forwarded?${allParams.toString()}`;
+        const res = await fetch(url, { cache: "no-store" });
+        if (res.ok) {
+          const d = await res.json();
+          let all = Array.isArray(d.items) ? d.items : d.items ?? [];
+          // if server returned a small sample due to unsupported pageSize=all, fallback to iterative below
+          if (!Array.isArray(all) || all.length === 0) {
+            // fallback to iterative
+            throw new Error("server-returned-empty-for-all");
+          }
+
+          // apply client-side filter for tech if needed
+          const finalAll = params.technician
+            ? all.filter((it) => String(getTechNameFromItem(it)).trim() === params.technician)
+            : all;
+
+          if (!finalAll.length) {
+            alert("No records to export for current filters.");
+            return;
+          }
+
+          return createAndDownloadCSV(finalAll);
+        } else {
+          // server didn't support pageSize=all — fallback to iterative
+          throw new Error("pageSize=all-not-supported");
+        }
+      } catch (errAll) {
+        // Iterative fallback (accumulate pages)
+        try {
+          const controller = new AbortController();
+          const sig = controller.signal;
+          // show simple prompt if very large? don't block, proceed
+          const accum = await fetchAllPagesIterative({
+            baseParams: params,
+            pageSize: ITERATIVE_PAGE_SIZE,
+            signal: sig,
+            onChunk: null,
+          });
+
+          const finalAll = params.technician
+            ? accum.filter((it) => String(getTechNameFromItem(it)).trim() === params.technician)
+            : accum;
+
+          if (!finalAll.length) {
+            alert("No records to export for current filters.");
+            return;
+          }
+
+          return createAndDownloadCSV(finalAll);
+        } catch (iterErr) {
+          console.error("downloadAllStable iterative error", iterErr);
+          alert("Export failed. Check console.");
+          return;
+        }
       }
-      const d = await res.json();
-      const all = Array.isArray(d.items) ? d.items : d.items ?? [];
-
-      // client-side fallback if needed
-      const finalAll = techVal
-        ? all.filter((it) => String(getTechNameFromItem(it)).trim() === techVal)
-        : all;
-
-      if (!finalAll.length) {
-        alert("No records to export for current filters.");
-        return;
-      }
-
-      const headers = ["Client", "Phone", "Address", "Service Type", "Price", "Status", "Technician", "Date"];
-      const rows = finalAll.map((c) => [
-        c.clientName || c.customerName || "—",
-        c.phone || "",
-        c.address || "",
-        c.type || c.serviceType || "",
-        c.price ?? "",
-        c.status || "",
-        c.techName || c.technicianName || c.techUsername || "",
-        c.createdAt ? new Date(c.createdAt).toLocaleString() : "",
-      ]);
-
-      const csv = [headers, ...rows].map((r) => r.map((c) => escapeCSV(c)).join(",")).join("\n");
-
-      const blob = new Blob([csv], { type: "text/csv" });
-      const urlObj = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = urlObj;
-      a.download = `forwarded-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(urlObj);
     } catch (err) {
       console.error("downloadAllStable error", err);
       alert("Export failed. Check console.");
     }
+  }
+
+  function createAndDownloadCSV(finalAll) {
+    const headers = ["Client", "Phone", "Address", "Service Type", "Price", "Status", "Technician", "Date"];
+    const rows = finalAll.map((c) => [
+      c.clientName || c.customerName || "—",
+      c.phone || "",
+      c.address || "",
+      c.type || c.serviceType || "",
+      c.price ?? "",
+      c.status || "",
+      c.techName || c.technicianName || c.techUsername || "",
+      c.createdAt ? new Date(c.createdAt).toLocaleString() : "",
+    ]);
+
+    const csv = [headers, ...rows].map((r) => r.map((c) => escapeCSV(c)).join(",")).join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const urlObj = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = urlObj;
+    a.download = `forwarded-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(urlObj);
   }
 
   /* ---------------------------
@@ -469,6 +575,7 @@ export default function ForwardedList() {
     technicianRef.current = "";
     manualLoadRef.current = false;
     loadDataStable({ pageNum: 1, reset: true });
+    fetchTotalStable().catch((e) => console.debug("fetchTotalStable error", e));
   }
 
   /* ---------------------------
@@ -482,10 +589,12 @@ export default function ForwardedList() {
     clearTimeout(debounceRef.current);
     setPage(1);
     loadDataStable({ pageNum: 1, reset: true });
+    fetchTotalStable().catch((e) => console.debug("fetchTotalStable error", e));
   }
 
   /* ---------------------------
      Modal details layout
+     Drag behaviour implemented: header area is draggable (pointer events)
   ----------------------------*/
   function DetailsRow({ label, children }) {
     return (
@@ -495,6 +604,192 @@ export default function ForwardedList() {
       </div>
     );
   }
+
+  /* ---------------------------
+     Try to compute lifetime total for current filters
+     - First try server count-like endpoints
+     - If not available, do iterative page scanning (safe-guarded)
+  ----------------------------*/
+  async function fetchTotalStable() {
+    try {
+      // prepare base params from current filters
+      const baseParams = {};
+      const qVal = qRef.current?.trim();
+      const statusVal = statusRef.current;
+      const techVal = technicianRef.current;
+
+      if (qVal) baseParams.q = qVal;
+      if (statusVal) baseParams.status = statusVal;
+      if (techVal) baseParams.technician = techVal;
+
+      // 1) Try some conventional server endpoints/params that many backends expose:
+      // /api/admin/forwarded?countOnly=true OR /api/admin/forwarded/count OR /api/admin/forwarded?count=true
+      const tryUrls = [
+        `/api/admin/forwarded?${new URLSearchParams({ ...baseParams, countOnly: "true" }).toString()}`,
+        `/api/admin/forwarded?${new URLSearchParams({ ...baseParams, count: "true" }).toString()}`,
+        `/api/admin/forwarded/count?${new URLSearchParams(baseParams).toString()}`,
+      ];
+
+      for (const u of tryUrls) {
+        try {
+          const r = await fetch(u, { cache: "no-store" });
+          if (!r.ok) continue;
+          const j = await r.json().catch(() => null);
+          // detect numeric
+          if (typeof j === "number") {
+            setTotal(j);
+            return j;
+          }
+          if (j && typeof j.total === "number") {
+            setTotal(Number(j.total));
+            return j.total;
+          }
+          if (j && typeof j.count === "number") {
+            setTotal(Number(j.count));
+            return j.count;
+          }
+          if (j && j.success && typeof j.total === "number") {
+            setTotal(Number(j.total));
+            return j.total;
+          }
+        } catch (e) {
+          // try next
+        }
+      }
+
+      // 2) If no count endpoint worked, attempt to fetch a single large page (pageSize=all) and measure length
+      try {
+        const allParams = new URLSearchParams(baseParams);
+        allParams.set("pageSize", "all");
+        const url = `/api/admin/forwarded?${allParams.toString()}`;
+        const r = await fetch(url, { cache: "no-store" });
+        if (r.ok) {
+          const d = await r.json();
+          const arr = Array.isArray(d.items) ? d.items : d.items ?? [];
+          if (Array.isArray(arr) && arr.length > 0) {
+            setTotal(arr.length);
+            return arr.length;
+          }
+          // sometimes server returns total in response
+          if (typeof d.total === "number") {
+            setTotal(Number(d.total));
+            return d.total;
+          }
+        }
+      } catch (e) {
+        // ignore and fallback to iterative
+      }
+
+      // 3) Iterative fallback: page through with large pageSize and count items.
+      const accum = await fetchAllPagesIterative({ baseParams, pageSize: ITERATIVE_PAGE_SIZE });
+      setTotal(accum.length);
+      return accum.length;
+    } catch (err) {
+      console.error("fetchTotalStable error", err);
+      return null;
+    }
+  }
+
+  /* ---------------------------
+     Drag handlers
+     - Drag start only when pressing header area
+     - Uses pointer events so touch works out-of-the-box
+     - Constrains movement inside visible viewport (keeps modal at least partially visible)
+  ----------------------------*/
+  useEffect(() => {
+    function onMove(e) {
+      if (!draggingRef.current) return;
+      try {
+        const px = e.clientX ?? (e.touches && e.touches[0] && e.touches[0].clientX) ?? 0;
+        const py = e.clientY ?? (e.touches && e.touches[0] && e.touches[0].clientY) ?? 0;
+        const dx = px - startPointer.current.x;
+        const dy = py - startPointer.current.y;
+        const candidateX = startPos.current.x + dx;
+        const candidateY = startPos.current.y + dy;
+
+        // clamp to viewport so user can't drag modal completely off-screen
+        const modalEl = modalRef.current;
+        if (modalEl) {
+          const rect = modalEl.getBoundingClientRect();
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
+
+          // compute allowed min/max for translate relative to current centered position
+          // left-most allowed such that at least 60px remains visible horizontally, same for top
+          const minX = -rect.left + -rect.width + 60; // not too strict, but safe
+          const maxX = vw - rect.right - 60;
+          const minY = -rect.top + -rect.height + 60;
+          const maxY = vh - rect.bottom - 60;
+
+          // More robust clamping: ensure part remains visible
+          const clampedX = Math.max(Math.min(candidateX, Math.abs(maxX) ? maxX : candidateX, candidateX), Math.min(candidateX, candidateX + 0)) ;
+          // simpler clamp based on viewport edges (allow moderate freedom)
+          const leftLimit = -rect.left + - (rect.width * 0.75);
+          const rightLimit = vw - rect.right + (rect.width * 0.75);
+          const topLimit = -rect.top + - (rect.height * 0.75);
+          const bottomLimit = vh - rect.bottom + (rect.height * 0.75);
+
+          // Final clamps (safe)
+          const finalX = Math.max(Math.min(candidateX, rightLimit), leftLimit);
+          const finalY = Math.max(Math.min(candidateY, bottomLimit), topLimit);
+
+          setPos({ x: finalX, y: finalY });
+        } else {
+          setPos({ x: candidateX, y: candidateY });
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    function onUp() {
+      draggingRef.current = false;
+      try {
+        // release pointer capture if any
+        if (headerDragRef.current && headerDragRef.current.releasePointerCapture) {
+          try { headerDragRef.current.releasePointerCapture(); } catch {}
+        }
+      } catch {}
+      document.body.style.userSelect = "";
+      document.body.style.touchAction = "";
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, []);
+
+  function startDrag(e) {
+    // Only start dragging on primary button / touches
+    if (e instanceof PointerEvent && e.button !== 0) return;
+    draggingRef.current = true;
+    const px = e.clientX ?? (e.touches && e.touches[0] && e.touches[0].clientX) ?? 0;
+    const py = e.clientY ?? (e.touches && e.touches[0] && e.touches[0].clientY) ?? 0;
+    startPointer.current = { x: px, y: py };
+    startPos.current = { ...pos };
+    try {
+      // capture pointer on the header element so we get events reliably
+      if (e.pointerId && headerDragRef.current && headerDragRef.current.setPointerCapture) {
+        try { headerDragRef.current.setPointerCapture(e.pointerId); } catch {}
+      }
+    } catch (err) {}
+    // prevent text selection while dragging
+    document.body.style.userSelect = "none";
+    document.body.style.touchAction = "none";
+  }
+
+  // reset pos to center every time a new item opens
+  useEffect(() => {
+    setPos({ x: 0, y: 0 });
+  }, [viewItem]);
 
   /* ---------------------------
      Render
@@ -513,7 +808,7 @@ export default function ForwardedList() {
             <div>
               <h1 className="text-xl font-bold text-slate-900">Forwarded Calls</h1>
               <p className="text-sm text-slate-500">
-                Showing <span className="font-semibold">{items.length}</span> • Total <span className="font-semibold">{total}</span>
+                Showing <span className="font-semibold">{visibleCount}</span> (loaded) • Total <span className="font-semibold">{total ?? "—"}</span> (lifetime)
               </p>
             </div>
           </div>
@@ -521,7 +816,7 @@ export default function ForwardedList() {
           <div className="flex gap-2">
             <IconButton
               title="Refresh"
-              onClick={() => { setPage(1); loadDataStable({ pageNum: 1, reset: true }); }}
+              onClick={() => { setPage(1); loadDataStable({ pageNum: 1, reset: true }); fetchTotalStable().catch(()=>{}); }}
               className="bg-white border text-slate-800"
             >
               <FiRefreshCw />
@@ -682,7 +977,7 @@ export default function ForwardedList() {
       {/* modal */}
       <AnimatePresence>
         {viewItem && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
             <motion.div
               className="absolute inset-0 bg-black/50"
               initial={{ opacity: 0 }}
@@ -691,16 +986,30 @@ export default function ForwardedList() {
               onClick={() => setViewItem(null)}
             />
             <motion.div
-              className="bg-white rounded-2xl max-w-xl w-full z-50 shadow-2xl ring-1 ring-slate-200 overflow-hidden"
-              initial={{ y: 30, opacity: 0, scale: 0.98 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ y: 20, opacity: 0, scale: 0.98 }}
+              ref={modalRef}
+              /* IMPORTANT:
+                 - on small screens width=75vw and height=60vh (w-[75vw] h-[60vh])
+                 - on sm+ it's full width constrained by max-w-xl and automatic height
+                 - we use framer-motion style x/y to apply drag translate (pos)
+              */
+              style={{ x: pos.x, y: pos.y }}
+              className="bg-white rounded-2xl w-[75vw] h-[60vh] sm:w-full sm:max-w-xl max-w-md z-50 shadow-2xl ring-1 ring-slate-200 overflow-hidden"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 300, damping: 28 }}
             >
-              {/* header */}
-              <div className="flex items-center justify-between p-5 border-b">
+              {/* header - this area is the drag handle */}
+              <div
+                ref={headerDragRef}
+                onPointerDown={(e) => startDrag(e.nativeEvent)}
+                onTouchStart={(e) => startDrag(e.nativeEvent)}
+                className="flex items-center justify-between p-4 border-b cursor-grab touch-none"
+                style={{ touchAction: "none" }}
+                aria-label="Dialog header - drag to move"
+              >
                 <div className="flex items-center gap-3">
-                  <div className="h-12 w-12 rounded-lg bg-indigo-600 text-white grid place-items-center text-lg font-semibold">
+                  <div className="h-10 w-10 rounded-lg bg-indigo-600 text-white grid place-items-center text-lg font-semibold">
                     {((viewItem.clientName || viewItem.customerName || "U")[0] || "").toUpperCase()}
                   </div>
                   <div>
@@ -709,8 +1018,8 @@ export default function ForwardedList() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
+                <div className="flex items-center gap-3">
+                  <div className="text-right hidden sm:block">
                     <div className="text-xs text-slate-500">Price</div>
                     <div className="text-lg font-semibold text-emerald-700">{formatCurrency(viewItem.price)}</div>
                   </div>
@@ -720,8 +1029,8 @@ export default function ForwardedList() {
                 </div>
               </div>
 
-              {/* body */}
-              <div className="p-6 grid grid-cols-1 gap-4">
+              {/* body (scrollable if content overflows) */}
+              <div className="p-4 h-[calc(60vh-80px)] sm:h-auto overflow-auto">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-3">
                     <div className="flex items-center gap-3">
@@ -784,7 +1093,7 @@ export default function ForwardedList() {
 
                 {/* optional notes */}
                 {viewItem.notes || viewItem.remarks || viewItem.comment ? (
-                  <div>
+                  <div className="mt-4">
                     <div className="text-xs text-slate-500 mb-1">Notes</div>
                     <div className="text-sm text-slate-700 bg-slate-50 p-3 rounded-md">{viewItem.notes || viewItem.remarks || viewItem.comment}</div>
                   </div>
@@ -792,7 +1101,7 @@ export default function ForwardedList() {
               </div>
 
               {/* footer */}
-              <div className="p-5 border-t flex items-center justify-end gap-3">
+              <div className="p-4 border-t flex items-center justify-end gap-3">
                 <button onClick={() => setViewItem(null)} className="px-4 py-2 rounded-lg border text-sm">Close</button>
                 <button
                   onClick={() => {
