@@ -13,30 +13,35 @@ const ALLOWED_TABS = new Set([
 const PAGE_SIZE = 10;
 
 async function handler(req, res, user) {
-  if (req.method !== "GET") return res.status(405).end();
+  if (req.method !== "GET") {
+    return res.status(405).json({ success: false });
+  }
 
   try {
-    let { tab = "All Calls", page = 1 } = req.query;
+    // ---------------- QUERY SANITIZATION ----------------
+    let { tab = "All Calls", page = "1" } = req.query;
 
-    // ---------------- VALIDATION ----------------
-    tab = String(tab);
-    if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
-
-    page = parseInt(page, 10);
-    if (Number.isNaN(page) || page < 1) page = 1;
+    tab = ALLOWED_TABS.has(tab) ? tab : "All Calls";
+    page = Math.max(parseInt(page, 10) || 1, 1);
 
     // ---------------- DB ----------------
     const db = await getDb();
-    const coll = db.collection("forwarded_calls");
+    const callsColl = db.collection("forwarded_calls");
     const paymentColl = db.collection("payments");
 
     // ---------------- TECH MATCH ----------------
     const techIds = [user.id];
     if (ObjectId.isValid(user.id)) techIds.push(new ObjectId(user.id));
 
-    const match = { techId: { $in: techIds } };
+    /** 
+     * 🔑 SINGLE SOURCE OF TRUTH
+     * 👉 tab decides the query
+     */
+    const match = {
+      techId: { $in: techIds },
+    };
 
-    // ---------------- TAB FILTER (SINGLE SOURCE) ----------------
+    // ---------------- TAB LOGIC ----------------
     if (tab === "Today Calls") {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
@@ -49,14 +54,19 @@ async function handler(req, res, user) {
     } else if (tab === "Canceled") {
       match.status = "Canceled";
     } else {
-      // All Calls (default)
+      // All Calls
       match.status = { $ne: "Canceled" };
     }
 
     // ---------------- PAGINATION ----------------
     const skip = (page - 1) * PAGE_SIZE;
 
-    const docs = await coll
+    /**
+     * 🚀 FAST QUERY
+     * - indexed fields only
+     * - limit + 1 for hasMore
+     */
+    const docs = await callsColl
       .find(match)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -74,30 +84,27 @@ async function handler(req, res, user) {
         createdAt: 1,
         timeZone: 1,
         notes: 1,
-        paymentStatus: 1,
       })
       .toArray();
 
     const hasMore = docs.length > PAGE_SIZE;
-    const sliced = docs.slice(0, PAGE_SIZE);
+    const sliced = hasMore ? docs.slice(0, PAGE_SIZE) : docs;
 
-    // ---------------- PAYMENT STATUS (ULTRA FAST) ----------------
+    // ---------------- PAYMENT LOOKUP (O(1)) ----------------
     const callIds = sliced.map((c) => String(c._id));
 
-    let paidSet = new Set();
-    if (callIds.length > 0) {
-      const paidDocs = await paymentColl
+    const paidSet = new Set();
+    if (callIds.length) {
+      const payments = await paymentColl
         .find(
           { "calls.callId": { $in: callIds } },
           { projection: { "calls.callId": 1 } }
         )
         .toArray();
 
-      for (const p of paidDocs) {
-        if (Array.isArray(p.calls)) {
-          for (const c of p.calls) {
-            if (c?.callId) paidSet.add(String(c.callId));
-          }
+      for (const p of payments) {
+        for (const c of p.calls || []) {
+          if (c?.callId) paidSet.add(String(c.callId));
         }
       }
     }
@@ -127,14 +134,15 @@ async function handler(req, res, user) {
     }));
 
     // ---------------- RESPONSE ----------------
-    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
 
     return res.status(200).json({
       success: true,
-      items,
+      tab,          // 👈 echo back (debug + safety)
       page,
       pageSize: PAGE_SIZE,
       hasMore,
+      items,
     });
   } catch (err) {
     console.error("forwarded-calls error:", err);
