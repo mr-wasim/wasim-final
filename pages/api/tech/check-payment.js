@@ -1,3 +1,4 @@
+// pages/api/tech/check-payment.js
 import { getDb } from "../../../lib/api-helpers";
 import { ObjectId } from "mongodb";
 
@@ -21,9 +22,10 @@ export default async function handler(req, res) {
 
     const db = await getDb();
 
-    const query = ObjectId.isValid(callId) ? { _id: new ObjectId(callId) } : { _id: callId };
-
-    const call = await db.collection("forwarded_calls").findOne(query);
+    // call fetch
+    const call = await db.collection("forwarded_calls").findOne({
+      _id: new ObjectId(callId),
+    });
 
     if (!call) {
       return res.status(404).json({
@@ -32,8 +34,12 @@ export default async function handler(req, res) {
       });
     }
 
+    // ensure field exists
     let paymentStatus = "Pending";
-    if (call.paymentStatus === "Paid") paymentStatus = "Paid";
+
+    if (call.paymentStatus === "Paid") {
+      paymentStatus = "Paid";
+    }
 
     return res.json({
       success: true,
