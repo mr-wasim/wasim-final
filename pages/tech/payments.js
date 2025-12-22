@@ -41,6 +41,9 @@ export default function Payments() {
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [callSearch, setCallSearch] = useState("");
 
+  // 🔹 Show paid toggle for modal (default: hide paid)
+  const [showPaid, setShowPaid] = useState(false);
+
   // 🟦 Technician-selected calls with per-call payments
   const [selectedCalls, setSelectedCalls] = useState([]);
 
@@ -82,20 +85,33 @@ export default function Payments() {
     return () => controller.abort();
   }, []);
 
-  // ✅ Load technician calls
+  // ✅ Load technician calls (updated - lifetime search friendly + debug)
   const loadCalls = useCallback(async () => {
     try {
       setCallsLoading(true);
+
       const params = new URLSearchParams({
         tab: "All Calls",
         page: "1",
-        pageSize: "50",
+        pageSize: "1000", // lifetime-ish — change if too large
       });
 
       const r = await fetch("/api/tech/my-calls?" + params.toString(), {
         cache: "no-store",
       });
+
+      if (!r.ok) {
+        const txt = await r.text();
+        console.error("[loadCalls] non-ok response:", r.status, txt);
+        toast.error("Failed to load calls (server error)");
+        setCalls([]);
+        return;
+      }
+
       const d = await r.json();
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[loadCalls] response:", d);
+      }
 
       if (d?.success && Array.isArray(d.items)) {
         const mapped = d.items.map((i) => {
@@ -130,11 +146,7 @@ export default function Payments() {
           return {
             _id: i._id || i.id || "",
             clientName:
-              i.clientName ??
-              i.customerName ??
-              i.name ??
-              i.fullName ??
-              "",
+              i.clientName ?? i.customerName ?? i.name ?? i.fullName ?? "",
             phone: i.phone ?? "",
             address: i.address ?? "",
             type: i.type ?? "",
@@ -147,9 +159,13 @@ export default function Payments() {
         });
 
         setCalls(mapped);
+      } else {
+        setCalls([]);
       }
     } catch (err) {
       console.error("Calls load error:", err);
+      toast.error("Error loading calls");
+      setCalls([]);
     } finally {
       setCallsLoading(false);
     }
@@ -195,7 +211,6 @@ export default function Payments() {
 
         if (mounted && token) {
           setDeviceToken(token);
-          // fire-and-forget, no await (⚡ non-blocking)
           fetch("/api/save-fcm-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -283,17 +298,23 @@ export default function Payments() {
     };
   }, [selectedCalls]);
 
-  // 🔍 Filtered + Sorted calls for modal search
+  // 🔍 Filtered + Sorted calls for modal search (updated)
   const filteredCalls = useMemo(() => {
-    let base = calls;
-    if (callSearch.trim()) {
-      const q = callSearch.toLowerCase();
-      base = calls.filter(
+    let base = calls || [];
+
+    const q = callSearch.trim().toLowerCase();
+
+    // If search text present -> search across all calls (lifetime)
+    if (q) {
+      base = base.filter(
         (c) =>
           (c.clientName || "").toLowerCase().includes(q) ||
           (c.phone || "").toLowerCase().includes(q) ||
           (c.address || "").toLowerCase().includes(q)
       );
+    } else {
+      // No search text -> by default show only Pending calls unless user toggled showPaid
+      base = base.filter((c) => (showPaid ? true : c.paymentStatus !== "Paid"));
     }
 
     const sorted = [...base].sort((a, b) => {
@@ -310,7 +331,7 @@ export default function Payments() {
     });
 
     return sorted;
-  }, [calls, callSearch]);
+  }, [calls, callSearch, showPaid]);
 
   // ✅ Submit form (single fast API call + instant UI update)
   const submit = useCallback(
@@ -367,16 +388,14 @@ export default function Payments() {
 
         const d = await r.json();
         if (!r.ok) {
-          return toast.error(d.message || "Failed to record payment");
+          return toast.error(d.message || d.error || "Failed to record payment");
         }
 
         // 🟢 LOCAL STATE UPDATE – turant Payment Done
         const paidCallIds = selectedCalls.map((c) => c._id);
         setCalls((prev) =>
           prev.map((c) =>
-            paidCallIds.includes(c._id)
-              ? { ...c, paymentStatus: "Paid" }
-              : c
+            paidCallIds.includes(c._id) ? { ...c, paymentStatus: "Paid" } : c
           )
         );
 
@@ -571,16 +590,13 @@ export default function Payments() {
             {/* 🔹 Totals */}
             <div className="text-xs text-gray-700 bg-slate-50 border rounded-xl px-3 py-2 flex flex-wrap gap-2 justify-between">
               <span>
-                Online:{" "}
-                <span className="font-semibold">₹{totalOnline || 0}</span>
+                Online: <span className="font-semibold">₹{totalOnline || 0}</span>
               </span>
               <span>
-                Cash:{" "}
-                <span className="font-semibold">₹{totalCash || 0}</span>
+                Cash: <span className="font-semibold">₹{totalCash || 0}</span>
               </span>
               <span>
-                Total:{" "}
-                <span className="font-semibold">₹{totalCombined || 0}</span>
+                Total: <span className="font-semibold">₹{totalCombined || 0}</span>
               </span>
             </div>
 
@@ -612,11 +628,7 @@ export default function Payments() {
               </div>
               <div className="text-xs text-gray-500 mt-1">
                 Signature required.{" "}
-                <button
-                  type="button"
-                  onClick={clearSig}
-                  className="underline"
-                >
+                <button type="button" onClick={clearSig} className="underline">
                   Clear
                 </button>
               </div>
@@ -652,12 +664,24 @@ export default function Payments() {
             >
               <div className="flex justify-between items-center mb-3">
                 <h2 className="font-semibold text-sm">Select Call</h2>
-                <button
-                  onClick={() => setCallModalOpen(false)}
-                  className="text-gray-500 hover:text-black text-lg"
-                >
-                  ✕
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600 flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={showPaid}
+                      onChange={(e) => setShowPaid(e.target.checked)}
+                    />
+                    <span>Show Paid</span>
+                  </label>
+
+                  <button
+                    onClick={() => setCallModalOpen(false)}
+                    className="text-gray-500 hover:text-black text-lg"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               <input
@@ -687,9 +711,7 @@ export default function Payments() {
                           <div className="font-semibold truncate">
                             {c.clientName || "Unknown"}
                           </div>
-                          <div className="text-xs text-gray-600">
-                            {c.phone}
-                          </div>
+                          <div className="text-xs text-gray-600">{c.phone}</div>
                           <div className="text-xs text-gray-500 line-clamp-1">
                             {c.address}
                           </div>
