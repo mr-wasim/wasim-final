@@ -1,42 +1,51 @@
-// pages/api/forwarded-calls/index.js
+// pages/api/tech/my-calls.js
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 
-const ALLOWED_TABS = new Set([
-  "All Calls",
-  "Today Calls",
-  "Pending",
-  "Closed",
-  "Canceled",
-]);
+/**
+ * Returns forwarded calls for the logged-in technician.
+ * Each item includes paymentStatus: "Paid" | "Pending"
+ *
+ * Payment is considered present if:
+ *  - a payment document references the callId in payments.calls.callId
+ *  OR
+ *  - any payment.calls[] entry has normalized (name|phone|address) AND price equal to forwarded call
+ *
+ * Supports pageSize param (default 10). For lifetime modal, client may request pageSize=1000.
+ */
 
-const PAGE_SIZE = 10;
+function normalizeForKey(s = "") {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\d\s+,-]/g, "")
+    .trim();
+}
+
+function normalizePhone(p = "") {
+  return String(p || "").replace(/\D/g, "");
+}
 
 async function handler(req, res, user) {
   if (req.method !== "GET") return res.status(405).end();
 
   try {
-    let { tab = "All Calls", page = 1 } = req.query;
+    let { tab = "All Calls", page = 1, pageSize } = req.query;
+    page = parseInt(page, 10) || 1;
+    pageSize = parseInt(pageSize, 10) || 10;
 
-    // ---------------- VALIDATION ----------------
-    tab = String(tab);
+    const ALLOWED_TABS = new Set(["All Calls", "Today Calls", "Pending", "Closed", "Canceled"]);
     if (!ALLOWED_TABS.has(tab)) tab = "All Calls";
 
-    page = parseInt(page, 10);
-    if (Number.isNaN(page) || page < 1) page = 1;
-
-    // ---------------- DB ----------------
     const db = await getDb();
-    const coll = db.collection("forwarded_calls");
-    const paymentColl = db.collection("payments");
+    const forwardedColl = db.collection("forwarded_calls");
+    const paymentsColl = db.collection("payments");
 
-    // ---------------- TECH MATCH ----------------
     const techIds = [user.id];
     if (ObjectId.isValid(user.id)) techIds.push(new ObjectId(user.id));
 
     const match = { techId: { $in: techIds } };
 
-    // ---------------- TAB FILTER (SINGLE SOURCE) ----------------
     if (tab === "Today Calls") {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
@@ -49,25 +58,28 @@ async function handler(req, res, user) {
     } else if (tab === "Canceled") {
       match.status = "Canceled";
     } else {
-      // All Calls (default)
       match.status = { $ne: "Canceled" };
     }
 
-    // ---------------- PAGINATION ----------------
-    const skip = (page - 1) * PAGE_SIZE;
+    const skip = (page - 1) * pageSize;
 
-    const docs = await coll
+    // fetch forwarded calls slice (we request pageSize + 1 to detect hasMore)
+    const docs = await forwardedColl
       .find(match)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(PAGE_SIZE + 1)
+      .limit(pageSize + 1)
       .project({
         clientName: 1,
         customerName: 1,
         name: 1,
         fullName: 1,
         phone: 1,
+        mobile: 1,
+        contact: 1,
         address: 1,
+        addr: 1,
+        location: 1,
         type: 1,
         price: 1,
         status: 1,
@@ -78,70 +90,76 @@ async function handler(req, res, user) {
       })
       .toArray();
 
-    const hasMore = docs.length > PAGE_SIZE;
-    const sliced = docs.slice(0, PAGE_SIZE);
+    const hasMore = docs.length > pageSize;
+    const slice = docs.slice(0, pageSize);
 
-    // ---------------- PAYMENT STATUS (ULTRA FAST) ----------------
-    const callIds = sliced.map((c) => String(c._id));
+    // Build arrays to query payments efficiently
+    const callIdsAll = slice.map((c) => String(c._id));
 
-    let paidSet = new Set();
-    if (callIds.length > 0) {
-      const paidDocs = await paymentColl
-        .find(
-          { "calls.callId": { $in: callIds } },
-          { projection: { "calls.callId": 1 } }
-        )
-        .toArray();
+    // We will fetch payments that reference these callIds OR payments by this tech
+    const paymentsCursor = paymentsColl.find({
+      $or: [
+        { "calls.callId": { $in: callIdsAll } },
+        { techId: { $in: techIds } },
+      ],
+    });
 
-      for (const p of paidDocs) {
-        if (Array.isArray(p.calls)) {
-          for (const c of p.calls) {
-            if (c?.callId) paidSet.add(String(c.callId));
-          }
+    // Build sets
+    const paidByCallId = new Set();
+    const paidKeyWithPrice = new Set(); // key: normalizedName|phone|address|price
+
+    while (await paymentsCursor.hasNext()) {
+      const pay = await paymentsCursor.next();
+      if (!pay || !Array.isArray(pay.calls)) continue;
+      for (const pc of pay.calls) {
+        if (!pc) continue;
+        if (pc.callId) paidByCallId.add(String(pc.callId));
+        const name = normalizeForKey(pc.clientName || pc.name || "");
+        const phone = normalizePhone(pc.phone || pc.mobile || pc.contact || "");
+        const address = normalizeForKey(pc.address || pc.addr || pc.location || "");
+        const price = Number(pc.price || pc.amount || pc.total || 0);
+        if (name || phone || address) {
+          const key = `${name}|${phone}|${address}|${price}`;
+          paidKeyWithPrice.add(key);
         }
       }
     }
 
-    // ---------------- FINAL MAP ----------------
-    const items = sliced.map((i) => ({
-      _id: String(i._id),
+    // Map final items with paymentStatus determined by sets (callId OR key+price match)
+    const items = slice.map((i) => {
+      const clientName = i.clientName ?? i.customerName ?? i.name ?? i.fullName ?? "Unknown";
+      const phone = i.phone ?? i.mobile ?? i.contact ?? "";
+      const address = i.address ?? i.addr ?? i.location ?? "";
+      const price = Number(i.price || 0);
+      const key = `${normalizeForKey(clientName)}|${normalizePhone(phone)}|${normalizeForKey(address)}|${price}`;
+      const isPaid = paidByCallId.has(String(i._id)) || paidKeyWithPrice.has(key) || (i.paymentStatus && String(i.paymentStatus).toLowerCase().includes("paid"));
 
-      clientName:
-        i.clientName ??
-        i.customerName ??
-        i.name ??
-        i.fullName ??
-        "Unknown",
+      return {
+        _id: String(i._id),
+        clientName,
+        phone,
+        address,
+        type: i.type ?? "",
+        price,
+        status: i.status ?? "Pending",
+        createdAt: i.createdAt ?? "",
+        timeZone: i.timeZone ?? "",
+        notes: i.notes ?? "",
+        paymentStatus: isPaid ? "Paid" : "Pending",
+      };
+    });
 
-      phone: i.phone ?? "",
-      address: i.address ?? "",
-      type: i.type ?? "",
-      price: i.price ?? 0,
-
-      status: i.status ?? "Pending",
-      createdAt: i.createdAt ?? "",
-      timeZone: i.timeZone ?? "",
-      notes: i.notes ?? "",
-
-      paymentStatus: paidSet.has(String(i._id)) ? "Paid" : "Pending",
-    }));
-
-    // ---------------- RESPONSE ----------------
     res.setHeader("Cache-Control", "private, no-store");
-
     return res.status(200).json({
       success: true,
       items,
       page,
-      pageSize: PAGE_SIZE,
+      pageSize,
       hasMore,
     });
   } catch (err) {
-    console.error("forwarded-calls error:", err);
-    return res.status(500).json({
-      success: false,
-      error: "Internal Server Error",
-    });
+    console.error("my-calls error:", err);
+    return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 }
 
