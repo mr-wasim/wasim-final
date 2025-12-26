@@ -224,11 +224,14 @@ export default function AdminForms() {
                             target="_blank"
                             rel="noopener noreferrer"
                           >
-                           <img
-  src={`${row.stickerUrl}?v=${row.updatedAt || row.createdAt || Date.now()}`}
-  alt="sticker"
-  style={{ width: "40px", height: "40px", objectFit: "cover" }}
-/>
+                           {forms.map((row) => (
+  <img
+    key={row._id}
+    src={`${row.stickerUrl}?v=${row.updatedAt || row.createdAt || Date.now()}`}
+    alt="sticker"
+    style={{ width: "40px", height: "40px", objectFit: "cover" }}
+  />
+))}
                           </a>
                         ) : (
                           "-"
