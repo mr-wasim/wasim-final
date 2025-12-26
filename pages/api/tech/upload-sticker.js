@@ -1,7 +1,8 @@
 // pages/api/tech/upload-sticker.js
 // Accept large raw images (up to 15 MB) and aggressively compress to a tiny webp (~5-6 KB).
-// NOTE: This endpoint is CPU-heavy when compressing large images. For heavy load consider background/queue.
 // Requires: npm install multer sharp
+// NOTE: This file is meant for Next.js API routes. Ensure server.js (above) is used in production
+// so that /uploads is served from persistent path (/var/www/chimney-uploads).
 
 import multer from "multer";
 import fs from "fs";
@@ -15,15 +16,35 @@ export const config = {
   },
 };
 
-// Directories
-const TMP_DIR = path.join(process.cwd(), "tmp_uploads");
-const OUT_DIR = path.join(process.cwd(), "public", "uploads", "stickers");
+// Persistent directories (must match server.js)
+const PERSISTENT_ROOT = "/var/www/chimney-uploads";
+const TMP_DIR = path.join(PERSISTENT_ROOT, "tmp");
+const OUT_DIR = path.join(PERSISTENT_ROOT, "stickers");
 
 // Ensure directories exist
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
-if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+if (!fs.existsSync(PERSISTENT_ROOT)) {
+  try {
+    fs.mkdirSync(PERSISTENT_ROOT, { recursive: true });
+  } catch (e) {
+    console.error("Failed to create PERSISTENT_ROOT:", e);
+  }
+}
+if (!fs.existsSync(TMP_DIR)) {
+  try {
+    fs.mkdirSync(TMP_DIR, { recursive: true });
+  } catch (e) {
+    console.error("Failed to create TMP_DIR:", e);
+  }
+}
+if (!fs.existsSync(OUT_DIR)) {
+  try {
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+  } catch (e) {
+    console.error("Failed to create OUT_DIR:", e);
+  }
+}
 
-// Multer disk storage (save raw upload to temp)
+// Multer disk storage: save raw upload to TMP_DIR
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, TMP_DIR),
   filename: (req, file, cb) =>
@@ -35,7 +56,7 @@ const storage = multer.diskStorage({
     ),
 });
 
-// Allow reasonably large raw uploads (user requested >=5MB). Here we set 15MB.
+// Allow reasonably large raw uploads (>=5MB requested). Set to 15MB.
 const upload = multer({
   storage,
   limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
@@ -49,13 +70,12 @@ const upload = multer({
 
 // Compression configuration
 const TARGET_BYTES = 6 * 1024; // ~6 KB final target
-const MIN_DIM = 64; // do not reduce below this px
+const MIN_DIM = 64; // minimum dimension allowed
 const MAX_START_DIM = 1200; // starting width cap
-const MAX_ITER = 16; // iteration attempts
-const START_QUALITY = 80; // start high, then reduce
+const MAX_ITER = 16;
+const START_QUALITY = 80;
 
 async function compressToTarget(inputBuffer, targetBytes = TARGET_BYTES) {
-  // Determine initial width from metadata
   let meta;
   try {
     meta = await sharp(inputBuffer).metadata();
@@ -63,14 +83,13 @@ async function compressToTarget(inputBuffer, targetBytes = TARGET_BYTES) {
     meta = null;
   }
 
-  // start width: use image width but cap it to MAX_START_DIM (or START_DIM fallback)
+  // start width from metadata or cap
   let width = Math.min(MAX_START_DIM, meta?.width || MAX_START_DIM);
   if (!width || width <= 0) width = MAX_START_DIM;
 
   let quality = START_QUALITY;
   let lastBuf = null;
 
-  // Iteratively try reducing quality first, then dimensions
   for (let i = 0; i < MAX_ITER; i++) {
     try {
       const buf = await sharp(inputBuffer)
@@ -80,50 +99,44 @@ async function compressToTarget(inputBuffer, targetBytes = TARGET_BYTES) {
         .toBuffer();
 
       lastBuf = buf;
+
       if (buf.length <= targetBytes) {
         return buf;
       }
 
-      // If not small enough, reduce quality more aggressively first
+      // reduce quality aggressively first
       if (quality > 12) {
-        // drop quality by a big step but not below 6
         quality = Math.max(6, quality - Math.ceil((quality - 6) * 0.5));
       } else {
-        // quality is already low — reduce dimensions (75% each step)
+        // then reduce width
         const nextWidth = Math.max(MIN_DIM, Math.round(width * 0.7));
-        if (nextWidth === width) {
-          // can't reduce more
-          break;
-        }
+        if (nextWidth === width) break;
         width = nextWidth;
-        // after scaling down, bump quality a little to keep contrast
         quality = Math.max(6, Math.round(quality * 0.9));
       }
     } catch (err) {
-      // On any sharp failure try to reduce width & quality and continue
+      // On error, shrink width and quality and continue
       width = Math.max(MIN_DIM, Math.round(width * 0.7));
       quality = Math.max(6, Math.round(quality * 0.8));
     }
   }
 
-  // If we couldn't reach target, attempt an ultra-aggressive final pass:
+  // ultra aggressive fallback
   try {
     const ultra = await sharp(inputBuffer)
       .rotate()
       .resize({ width: MIN_DIM, withoutEnlargement: true })
       .webp({ quality: 6, effort: 6 })
       .toBuffer();
-    // if ultra smaller than lastBuf or lastBuf null, return ultra
     if (!lastBuf || ultra.length <= lastBuf.length) return ultra;
-  } catch (err) {
+  } catch (e) {
     // ignore
   }
 
-  // fallback to last best buffer (may be larger than target)
   if (lastBuf) return lastBuf;
 
-  // as very last resort convert to a tiny blank placeholder image to avoid errors
-  const placeholder = await sharp({
+  // final fallback: tiny blank placeholder PNG to avoid failure
+  return await sharp({
     create: {
       width: MIN_DIM,
       height: MIN_DIM,
@@ -133,7 +146,6 @@ async function compressToTarget(inputBuffer, targetBytes = TARGET_BYTES) {
   })
     .png()
     .toBuffer();
-  return placeholder;
 }
 
 export default async function handler(req, res) {
@@ -142,12 +154,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: "Method not allowed" });
   }
 
-  // Run multer to accept raw upload to temp
   upload(req, res, async (multerErr) => {
-    // multerErr may be a MulterError or generic Error
     if (multerErr) {
       console.error("Multer error:", multerErr);
-      // If multer created a file before failing, attempt to remove it
+      // remove temp file if created
       try {
         if (req?.file?.path) await fs.promises.unlink(req.file.path).catch(() => {});
       } catch {}
@@ -167,19 +177,16 @@ export default async function handler(req, res) {
     const finalPath = path.join(OUT_DIR, finalName);
 
     try {
-      // Read raw file from temp
       const inputBuffer = await fs.promises.readFile(tempPath);
 
-      // Compress to target bytes (server-side sharp)
       const compressed = await compressToTarget(inputBuffer, TARGET_BYTES);
 
-      // Write compressed final file
+      // write final compressed file
       await fs.promises.writeFile(finalPath, compressed);
 
-      // Cleanup temp file
+      // cleanup temp
       await fs.promises.unlink(tempPath).catch(() => {});
 
-      // Return URL and final size
       return res.status(200).json({
         success: true,
         url: `/uploads/stickers/${finalName}`,
@@ -188,7 +195,7 @@ export default async function handler(req, res) {
       });
     } catch (procErr) {
       console.error("Processing error:", procErr);
-      // Attempt cleanup of temp
+      // attempt cleanup
       try {
         await fs.promises.unlink(tempPath).catch(() => {});
       } catch {}
