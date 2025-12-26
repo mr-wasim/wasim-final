@@ -25,10 +25,6 @@ function playSuccessSound() {
   } catch {}
 }
 
-// ======================================================
-//                 MAIN TECH HOME PAGE (UPDATED)
-// ======================================================
-
 export default function TechHome() {
   const [user, setUser] = useState(null);
   const [isPending, startTransition] = useTransition();
@@ -56,17 +52,20 @@ export default function TechHome() {
   const [stickerUploadProgress, setStickerUploadProgress] = useState(0);
   const [stickerUploadedUrl, setStickerUploadedUrl] = useState(""); // server URL
 
-  // ---------------- Call Select Modal States ----------------
+  // call modal states
   const [calls, setCalls] = useState([]);
   const [callsLoading, setCallsLoading] = useState(false);
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [callSearch, setCallSearch] = useState("");
   const [selectedCall, setSelectedCall] = useState(null);
 
+  // submission duplication guard: fingerprint of last-submitted main fields
+  const [lastSubmittedFingerprint, setLastSubmittedFingerprint] = useState("");
+
   // 🎉 Happy success overlay
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
 
-  // ---------------- Responsive Canvas ----------------
+  // Responsive canvas
   useEffect(() => {
     const updateSize = () => {
       setCanvasWidth(window.innerWidth < 500 ? window.innerWidth - 40 : 500);
@@ -76,25 +75,19 @@ export default function TechHome() {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
-  // ======================================================
-  //     CORRECT & FULL FAST CALL FETCHER (WORKING)
-  // ======================================================
+  // Calls loader
   const loadCalls = async () => {
     try {
       setCallsLoading(true);
-
       const params = new URLSearchParams({
         tab: "All Calls",
         page: "1",
         pageSize: "50",
       });
-
       const r = await fetch("/api/tech/my-calls?" + params.toString(), {
         cache: "no-store",
       });
-
       const d = await r.json();
-
       if (d?.success && Array.isArray(d.items)) {
         const mapped = d.items.map((i) => ({
           _id: i._id || i.id || "",
@@ -109,7 +102,6 @@ export default function TechHome() {
           timeZone: i.timeZone ?? "",
           notes: i.notes ?? "",
         }));
-
         setCalls(mapped);
       } else {
         console.warn("No calls found");
@@ -121,9 +113,7 @@ export default function TechHome() {
     }
   };
 
-  // ======================================================
-  //                 AUTH + LOAD CALLS
-  // ======================================================
+  // Auth + initial load
   useEffect(() => {
     (async () => {
       try {
@@ -132,18 +122,15 @@ export default function TechHome() {
           window.location.href = "/login";
           return;
         }
-
         const u = await me.json();
         if (u.role !== "technician") {
           window.location.href = "/login";
           return;
         }
-
         startTransition(() => {
           setUser(u);
           setLoading(false);
         });
-
         loadCalls();
       } catch {
         window.location.href = "/login";
@@ -151,20 +138,15 @@ export default function TechHome() {
     })();
   }, []);
 
-  // ======================================================
-  //                 CLEAR SIGNATURE
-  // ======================================================
+  // Clear signature
   function clearSig() {
     sigRef.current?.clear();
     setForm((prev) => ({ ...prev, signature: "" }));
   }
 
-  // ======================================================
-  //     Auto-Fill FORM when selecting a call from Modal
-  // ======================================================
+  // Select call autofill
   function handleSelectCall(call) {
     if (!call) return;
-
     startTransition(() => {
       setSelectedCall(call);
       setForm((prev) => ({
@@ -174,20 +156,14 @@ export default function TechHome() {
         phone: call.phone || "",
         payment: call.price ?? "",
       }));
-
       setCallModalOpen(false);
     });
   }
 
-  // ======================================================
-  //               IMAGE COMPRESS & UPLOAD HELPERS
-  // ======================================================
-
-  // compressImage: aggressive client-side compression (webp) to target size
+  // ===================== Compression helpers (client) =====================
   async function compressImageFileToTarget(file, targetBytes = 6 * 1024) {
     if (!file) throw new Error("No file");
 
-    // load image element
     const createImage = (blob) =>
       new Promise((res, rej) => {
         const img = new Image();
@@ -198,15 +174,12 @@ export default function TechHome() {
 
     const img = await createImage(file);
 
-    // helper to get blob from canvas (webp)
     const canvasToBlob = (canvas, quality) =>
       new Promise((resolve) => {
-        // prefer webp where supported
         const mime = "image/webp";
         canvas.toBlob(resolve, mime, quality);
       });
 
-    // start dims
     let width = Math.min(1000, img.width);
     let height = Math.round((img.height / img.width) * width);
     if (!width || !height) {
@@ -214,41 +187,48 @@ export default function TechHome() {
       height = 400;
     }
 
-    // iterative attempts
     let quality = 0.85;
     let lastBlob = null;
 
-    for (let pass = 0; pass < 10; pass++) {
+    // progressive client-side passes to try to hit the tiny target before sending to server
+    for (let pass = 0; pass < 14; pass++) {
       const canvas = document.createElement("canvas");
-      canvas.width = Math.max(96, Math.round(width));
-      canvas.height = Math.max(96, Math.round(height));
+      canvas.width = Math.max(48, Math.round(width));
+      canvas.height = Math.max(48, Math.round(height));
       const ctx = canvas.getContext("2d");
+      // draw with slight smoothing
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "low";
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
       const blob = await canvasToBlob(canvas, quality);
       if (!blob) throw new Error("Compression failed");
 
       lastBlob = blob;
+      if (blob.size <= targetBytes) return blob;
 
-      // if small enough return
-      if (blob.size <= targetBytes) {
-        return blob;
-      }
-
-      // reduce quality and size progressively
-      if (quality > 0.18) {
-        quality = Math.max(0.12, quality - 0.14);
+      // reduce quality / shrink further
+      if (quality > 0.12) {
+        quality = Math.max(0.05, quality - 0.12);
       } else {
-        width = Math.max(96, Math.round(width * 0.75));
-        height = Math.max(96, Math.round((img.height / img.width) * width));
+        width = Math.max(48, Math.round(width * 0.75));
+        height = Math.max(48, Math.round((img.height / img.width) * width));
         quality = 0.6;
       }
     }
 
-    // fallback: return last attempt
     return lastBlob;
   }
 
+  const blobToDataURL = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (e) => reject(e);
+      reader.readAsDataURL(blob);
+    });
+
+  // ===================== Sticker upload (client -> server) =====================
   async function handleFileInputChange(e) {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
@@ -257,77 +237,89 @@ export default function TechHome() {
       setStickerUploading(true);
       setStickerUploadProgress(5);
 
-      // create preview fast
-      const reader = new FileReader();
-      reader.onload = () => setStickerPreview(reader.result);
-      reader.readAsDataURL(f);
+      // quick preview
+      const previewReader = new FileReader();
+      previewReader.onload = () => setStickerPreview(previewReader.result);
+      previewReader.readAsDataURL(f);
 
-      // compress aggressively to ~6KB range (client-side)
-      const targetBytes = 6 * 1024; // ~6KB
+      // aggressive client-side attempt to reduce weight before server
+      const targetBytes = 6 * 1024; // aim for ~6KB
       const compressedBlob = await compressImageFileToTarget(f, targetBytes);
 
       setStickerUploadProgress(30);
-
-      // debug: show compressed size in console
       try {
         // eslint-disable-next-line no-console
-        console.log("Client compressed size:", compressedBlob.size);
+        console.log("Client compressed bytes:", compressedBlob.size);
       } catch {}
 
-      // upload to server via FormData
-      const fd = new FormData();
-      const filename = `sticker_${Date.now()}.webp`;
-      fd.append("sticker", compressedBlob, filename);
+      // convert to base64
+      const dataUrl = await blobToDataURL(compressedBlob);
 
       setStickerUploadProgress(50);
 
-      // upload
+      // POST to server; pass targetKB to request extremely small final file
       const res = await fetch("/api/tech/upload-sticker", {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: dataUrl, targetKB: 6 }),
       });
 
       if (!res.ok) {
-        // try to parse error message
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Upload failed");
       }
 
       const data = await res.json();
-      if (!data?.success || !data.url) {
-        throw new Error("Upload did not return URL");
-      }
+      if (!data?.success || !data.url) throw new Error("Upload did not return URL");
 
       setStickerUploadProgress(100);
       setStickerUploadedUrl(data.url);
       setForm((p) => ({ ...p, stickerUrl: data.url }));
-      toast.success("Sticker uploaded");
+      toast.success(`Sticker uploaded (${Math.round((data.sizeKB || 0))} KB)`);
     } catch (err) {
       console.error("Sticker upload err:", err);
-      toast.error("Sticker upload failed");
+      toast.error(err.message || "Sticker upload failed");
     } finally {
       setStickerUploading(false);
       setTimeout(() => setStickerUploadProgress(0), 600);
     }
   }
 
-  // trigger hidden file input (camera-first)
+  // trigger file input
   function openCameraForSticker() {
     if (!fileInputRef.current) return;
-    // reset value to allow same-file re-select
     fileInputRef.current.value = null;
     fileInputRef.current.click();
   }
 
-  // ======================================================
-  //                 SUBMIT FORM
-  // ======================================================
+  // ===================== Submit form =====================
   async function submit(e) {
     e.preventDefault();
+
+    // Require sticker uploaded
+    if (!form.stickerUrl) {
+      toast.error("Sticker upload required before submitting");
+      return;
+    }
+
+    // generate fingerprint of main form fields to detect duplicate submit
+    const fingerprintObj = {
+      clientName: form.clientName?.trim() || "",
+      address: form.address?.trim() || "",
+      phone: form.phone?.trim() || "",
+      payment: form.payment?.toString() || "",
+    };
+    const fingerprint = JSON.stringify(fingerprintObj);
+
+    // if same as last submitted show toast and stop
+    if (lastSubmittedFingerprint && lastSubmittedFingerprint === fingerprint) {
+      toast("Already submitted", { icon: "ℹ️" });
+      return;
+    }
+
     try {
       setSubmitting(true);
       const signature = form.signature || sigRef.current?.toDataURL();
-      // include stickerUrl (if uploaded)
       const r = await fetch("/api/tech/submit-form", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -339,18 +331,19 @@ export default function TechHome() {
         return;
       }
 
-      // 🔊 SUCCESS SOUND
       playSuccessSound();
-
-      // 🎉 Happy toast
       toast.success("Form submitted ✅");
 
-      // 🎉 Show happy overlay
+      // Save fingerprint so duplicate can't be immediately re-submitted
+      setLastSubmittedFingerprint(fingerprint);
+
+      // show overlay
       setShowSuccessOverlay(true);
       setTimeout(() => {
         setShowSuccessOverlay(false);
       }, 1600);
 
+      // reset UI form (keep lastSubmittedFingerprint)
       setForm({
         clientName: "",
         address: "",
@@ -372,9 +365,7 @@ export default function TechHome() {
     }
   }
 
-  // ======================================================
-  //                    LOADING SKELETON
-  // ======================================================
+  // Skeleton component
   const Skeleton = () => (
     <div className="animate-pulse space-y-4 p-4">
       <div className="h-6 bg-gray-200 rounded w-1/3"></div>
@@ -387,9 +378,6 @@ export default function TechHome() {
     </div>
   );
 
-  // ======================================================
-  //               SEARCH FILTER inside Modal
-  // ======================================================
   const filteredCalls = useMemo(() => {
     if (!callSearch.trim()) return calls;
     const q = callSearch.toLowerCase();
@@ -401,9 +389,7 @@ export default function TechHome() {
     );
   }, [calls, callSearch]);
 
-  // ======================================================
-  //                     MAIN UI
-  // ======================================================
+  // ===================== UI =====================
   return (
     <div className="pb-16">
       <Header user={user} />
@@ -419,7 +405,7 @@ export default function TechHome() {
             <Skeleton />
           ) : (
             <form onSubmit={submit} className="grid gap-3">
-              {/* ---------------- SELECT CALL BUTTON ---------------- */}
+              {/* select call */}
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-gray-700">
                   Select Call (Auto-fill)
@@ -439,7 +425,6 @@ export default function TechHome() {
                 </button>
               </div>
 
-              {/* ---------------- FORM INPUTS ---------------- */}
               <input
                 className="input border rounded-lg p-2"
                 placeholder="Client Name"
@@ -493,7 +478,7 @@ export default function TechHome() {
                 <option>Under Process</option>
               </select>
 
-              {/* ---------------- STICKER UPLOAD (Camera Only) ---------------- */}
+              {/* sticker upload */}
               <div>
                 <div className="text-sm font-semibold mb-1">Sticker (Camera)</div>
 
@@ -510,7 +495,6 @@ export default function TechHome() {
                   <button
                     type="button"
                     onClick={() => {
-                      // clear sticker
                       setStickerPreview(null);
                       setStickerUploadedUrl("");
                       setForm((p) => ({ ...p, stickerUrl: "" }));
@@ -550,7 +534,7 @@ export default function TechHome() {
                 )}
               </div>
 
-              {/* ---------------- SIGNATURE PAD ---------------- */}
+              {/* signature */}
               <div>
                 <div className="text-sm font-semibold mb-1">Client Signature</div>
                 <div className="border rounded-xl overflow-hidden">
@@ -588,9 +572,7 @@ export default function TechHome() {
 
       <BottomNav />
 
-      {/* ======================================================
-                     CALL SELECTION MODAL
-      ====================================================== */}
+      {/* Call modal */}
       <AnimatePresence>
         {callModalOpen && (
           <motion.div
@@ -664,9 +646,7 @@ export default function TechHome() {
         )}
       </AnimatePresence>
 
-      {/* ======================================================
-                     HAPPY SUCCESS OVERLAY
-      ====================================================== */}
+      {/* Success overlay */}
       <AnimatePresence>
         {showSuccessOverlay && (
           <motion.div
@@ -682,7 +662,6 @@ export default function TechHome() {
               transition={{ type: "spring", stiffness: 180, damping: 15 }}
               className="relative bg-white rounded-3xl px-8 py-6 shadow-2xl text-center max-w-xs w-full overflow-hidden"
             >
-              {/* soft background circles */}
               <div className="pointer-events-none absolute -top-10 -left-10 h-24 w-24 bg-blue-100 rounded-full opacity-70" />
               <div className="pointer-events-none absolute -bottom-12 -right-6 h-28 w-28 bg-emerald-100 rounded-full opacity-70" />
 
