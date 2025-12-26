@@ -1,3 +1,4 @@
+"use client";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import PopupShell from "./PopupShell";
@@ -32,11 +33,10 @@ export default function FormsPopup({ onClose }) {
       // FIXED — Correct technician name mapping
       const list = (d.items || []).map((x) => ({
         ...x,
-
         techName:
-          x.techUsername ||               // ⭐ most accurate
-          x.technician?.username ||       // if populated
-          x.technicianName ||             // alternative key
+          x.techUsername ||               // ⭐ primary
+          x.technician?.username ||       // populated ref
+          x.technicianName ||             // alt key
           x.tech ||                       // fallback
           x.assignedTech || 
           "N/A",
@@ -59,8 +59,9 @@ export default function FormsPopup({ onClose }) {
           <button
             onClick={() => { setFilterMode("month"); load(); }}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
-              filterMode === "month" ? "bg-blue-600 text-white shadow"
-              : "bg-white border"
+              filterMode === "month"
+                ? "bg-blue-600 text-white shadow"
+                : "bg-white border"
             }`}
           >
             This Month
@@ -114,8 +115,11 @@ export default function FormsPopup({ onClose }) {
       {/* LOADING SKELETON */}
       {forms === null && (
         <div className="space-y-3">
-          {[1,2,3].map(i => (
-            <div key={i} className="p-4 bg-white rounded-2xl border shadow animate-pulse">
+          {[1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="p-4 bg-white rounded-2xl border shadow animate-pulse"
+            >
               <div className="h-4 bg-gray-300 w-1/3 rounded mb-2"></div>
               <div className="h-3 bg-gray-200 w-1/4 rounded"></div>
             </div>
@@ -148,7 +152,6 @@ export default function FormsPopup({ onClose }) {
                   </div>
                   <div className="text-sm text-gray-500">{f.phone}</div>
 
-                  {/* FIXED — technician name now correct */}
                   <div className="text-xs text-gray-500 mt-1">
                     Submitted by: <b>{f.techName}</b>
                   </div>
@@ -180,7 +183,7 @@ export default function FormsPopup({ onClose }) {
               transition={{ duration: 0.18 }}
               className="bg-white w-[92%] max-w-xl rounded-2xl p-6 shadow-xl border"
             >
-              
+
               {/* HEADER */}
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-semibold text-gray-800">
@@ -203,10 +206,9 @@ export default function FormsPopup({ onClose }) {
                 <p><b>Service Type:</b> {active.type}</p>
                 <p><b>Created:</b> {new Date(active.createdAt).toLocaleString()}</p>
 
-                {/* FIXED Technician Field */}
                 <p><b>Technician:</b> {active.techName}</p>
 
-                {/* Signature */}
+                {/* SIGNATURE */}
                 {active.signature && (
                   <div className="mt-3">
                     <b>Customer Signature:</b>
@@ -215,6 +217,24 @@ export default function FormsPopup({ onClose }) {
                       className="mt-2 w-full h-32 object-contain border p-2 rounded-xl"
                       alt="signature"
                     />
+                  </div>
+                )}
+
+                {/* ✅ STICKER (NEW) */}
+                {active.stickerUrl && (
+                  <div className="mt-3">
+                    <b>Service Sticker:</b>
+                    <a
+                      href={active.stickerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <img
+                        src={active.stickerUrl}
+                        className="mt-2 w-full h-40 object-contain border p-2 rounded-xl hover:scale-[1.02] transition cursor-pointer"
+                        alt="sticker"
+                      />
+                    </a>
                   </div>
                 )}
 

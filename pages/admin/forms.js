@@ -3,11 +3,11 @@ import Header from "../../components/Header";
 import { useEffect, useState } from "react";
 import { saveAs } from "../../utils/csv";
 
-// ✅ Realistic shimmer skeleton component
+// ✅ Realistic shimmer skeleton component (UPDATED: 9 columns)
 function SkeletonRow() {
   return (
     <tr className="animate-pulse">
-      {Array.from({ length: 8 }).map((_, i) => (
+      {Array.from({ length: 9 }).map((_, i) => (
         <td key={i} className="p-2">
           <div className="h-5 bg-gray-200 rounded w-full"></div>
         </td>
@@ -29,11 +29,18 @@ export default function AdminForms() {
   const [total, setTotal] = useState(0);
   const [typingTimeout, setTypingTimeout] = useState(null);
 
-  // ⚡ FAST FETCH with micro-delay (non-blocking UI)
+  // ⚡ FAST FETCH
   const load = async (p = page) => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({ q, status, tech, dateFrom, dateTo, page: p });
+      const params = new URLSearchParams({
+        q,
+        status,
+        tech,
+        dateFrom,
+        dateTo,
+        page: p,
+      });
       const res = await fetch(`/api/admin/forms?${params.toString()}`, {
         cache: "no-store",
       });
@@ -47,7 +54,7 @@ export default function AdminForms() {
     }
   };
 
-  // ✅ Fetch user + first data fast
+  // ✅ Fetch user + first data
   useEffect(() => {
     (async () => {
       const me = await fetch("/api/auth/me", { cache: "no-store" });
@@ -58,7 +65,7 @@ export default function AdminForms() {
     })();
   }, []);
 
-  // ✅ Debounce for search (instant feel)
+  // ✅ Debounce search
   const handleDebounce = (setter) => (e) => {
     const val = e.target.value;
     setter(val);
@@ -67,7 +74,14 @@ export default function AdminForms() {
   };
 
   const exportCSV = async () => {
-    const params = new URLSearchParams({ q, status, tech, dateFrom, dateTo, csv: "1" });
+    const params = new URLSearchParams({
+      q,
+      status,
+      tech,
+      dateFrom,
+      dateTo,
+      csv: "1",
+    });
     const res = await fetch(`/api/admin/forms?${params.toString()}`);
     const d = await res.json();
     saveAs("forms.csv", d.csv);
@@ -85,6 +99,7 @@ export default function AdminForms() {
             value={q}
             onChange={handleDebounce(setQ)}
           />
+
           <select
             className="input"
             value={status}
@@ -99,14 +114,27 @@ export default function AdminForms() {
             <option>Complaint Done</option>
             <option>Under Process</option>
           </select>
+
           <input
             className="input"
             placeholder="Technician username"
             value={tech}
             onChange={handleDebounce(setTech)}
           />
-          <input className="input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          <input className="input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+
+          <input
+            className="input"
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+          />
+          <input
+            className="input"
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+          />
+
           <div className="md:col-span-6 flex gap-2">
             <button
               onClick={() => {
@@ -136,6 +164,7 @@ export default function AdminForms() {
                   <th className="p-2">Payment</th>
                   <th className="p-2">Status</th>
                   <th className="p-2">Signature</th>
+                  <th className="p-2">Sticker</th>
                   <th className="p-2">Date</th>
                 </tr>
               </thead>
@@ -157,30 +186,63 @@ export default function AdminForms() {
                     <th className="p-2">Payment</th>
                     <th className="p-2">Status</th>
                     <th className="p-2">Signature</th>
+                    <th className="p-2">Sticker</th>
                     <th className="p-2">Date</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((it) => (
-                    <tr key={it._id} className="border-t hover:bg-gray-50 transition">
+                    <tr
+                      key={it._id}
+                      className="border-t hover:bg-gray-50 transition"
+                    >
                       <td className="p-2">{it.techUsername}</td>
                       <td className="p-2">{it.clientName}</td>
                       <td className="p-2">{it.phone}</td>
                       <td className="p-2">{it.address}</td>
                       <td className="p-2">₹{it.payment || 0}</td>
                       <td className="p-2">{it.status}</td>
+
+                      {/* Signature */}
                       <td className="p-2">
                         {it.signature ? (
-                          <img src={it.signature} alt="sig" className="h-10 rounded" />
+                          <img
+                            src={it.signature}
+                            alt="sig"
+                            className="h-10 rounded border"
+                          />
                         ) : (
                           "-"
                         )}
                       </td>
-                      <td className="p-2">{new Date(it.createdAt).toLocaleString()}</td>
+
+                      {/* ✅ Sticker */}
+                      <td className="p-2">
+                        {it.stickerUrl ? (
+                          <a
+                            href={it.stickerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <img
+                              src={it.stickerUrl}
+                              alt="sticker"
+                              className="h-10 rounded border hover:scale-105 transition cursor-pointer"
+                            />
+                          </a>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+
+                      <td className="p-2">
+                        {new Date(it.createdAt).toLocaleString()}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+
               <div className="flex justify-between mt-3">
                 <button
                   disabled={page <= 1}
@@ -193,9 +255,11 @@ export default function AdminForms() {
                 >
                   Prev
                 </button>
+
                 <div className="text-sm text-gray-600">
                   Page {page} • Total {total}
                 </div>
+
                 <button
                   onClick={() => {
                     const p = page + 1;
@@ -209,11 +273,12 @@ export default function AdminForms() {
               </div>
             </>
           ) : (
-            <div className="text-center text-gray-500 py-10">No records found</div>
+            <div className="text-center text-gray-500 py-10">
+              No records found
+            </div>
           )}
         </div>
       </main>
     </div>
   );
 }
-

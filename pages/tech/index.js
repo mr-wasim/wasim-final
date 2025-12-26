@@ -26,7 +26,7 @@ function playSuccessSound() {
 }
 
 // ======================================================
-//                 MAIN TECH HOME PAGE
+//                 MAIN TECH HOME PAGE (UPDATED)
 // ======================================================
 
 export default function TechHome() {
@@ -43,10 +43,18 @@ export default function TechHome() {
     phone: "",
     status: "Services Done",
     signature: "",
+    stickerUrl: "", // will contain uploaded sticker URL returned from server
   });
 
   const [canvasWidth, setCanvasWidth] = useState(500);
   const sigRef = useRef();
+
+  // sticker related states
+  const fileInputRef = useRef();
+  const [stickerPreview, setStickerPreview] = useState(null); // dataURL preview
+  const [stickerUploading, setStickerUploading] = useState(false);
+  const [stickerUploadProgress, setStickerUploadProgress] = useState(0);
+  const [stickerUploadedUrl, setStickerUploadedUrl] = useState(""); // server URL
 
   // ---------------- Call Select Modal States ----------------
   const [calls, setCalls] = useState([]);
@@ -91,11 +99,7 @@ export default function TechHome() {
         const mapped = d.items.map((i) => ({
           _id: i._id || i.id || "",
           clientName:
-            i.clientName ??
-            i.customerName ??
-            i.name ??
-            i.fullName ??
-            "",
+            i.clientName ?? i.customerName ?? i.name ?? i.fullName ?? "",
           phone: i.phone ?? "",
           address: i.address ?? "",
           type: i.type ?? "",
@@ -176,6 +180,138 @@ export default function TechHome() {
   }
 
   // ======================================================
+  //               IMAGE COMPRESS & UPLOAD HELPERS
+  // ======================================================
+
+  // compressImage: sculpt image via canvas to target size (in bytes)
+  async function compressImageFileToTarget(file, targetBytes = 11 * 1024) {
+    // returns Blob
+    if (!file) throw new Error("No file");
+
+    // helper to create image element from blob
+    const createImage = (blob) =>
+      new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = (e) => rej(e);
+        img.src = URL.createObjectURL(blob);
+      });
+
+    // initial read as blob
+    let blob = file;
+    let img = await createImage(blob);
+
+    // start with current width but cap to maxWidth
+    let maxWidth = 1200;
+    // reduce if huge
+    let width = img.width;
+    let height = img.height;
+    if (width > maxWidth) {
+      const ratio = maxWidth / width;
+      width = Math.round(width * ratio);
+      height = Math.round(height * ratio);
+    }
+
+    // iterative reduce: first reduce quality steps, then scale down if needed
+    let quality = 0.85;
+    for (let pass = 0; pass < 8; pass++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // try toBlob
+      // prefer jpeg
+      const blobCandidate = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", quality)
+      );
+
+      if (!blobCandidate) throw new Error("Compression failed");
+
+      if (blobCandidate.size <= targetBytes || quality < 0.15) {
+        return blobCandidate;
+      }
+
+      // decrease quality and maybe size
+      quality = quality - 0.12; // reduce quality
+      if (quality < 0.2) {
+        // scale down dimensions too
+        width = Math.round(width * 0.8);
+        height = Math.round(height * 0.8);
+        quality = 0.6;
+      }
+      // loop continues
+    }
+
+    // final fallback: return last candidate but it might be larger than target
+    return blob;
+  }
+
+  async function handleFileInputChange(e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+
+    try {
+      setStickerUploading(true);
+      setStickerUploadProgress(5);
+
+      // create preview first (fast)
+      const reader = new FileReader();
+      reader.onload = () => setStickerPreview(reader.result);
+      reader.readAsDataURL(f);
+
+      // compress aggressively to ~10KB range
+      const targetKB = 10 * 1024; // bytes
+      const compressedBlob = await compressImageFileToTarget(f, targetKB);
+
+      setStickerUploadProgress(30);
+
+      // upload to server via FormData
+      const fd = new FormData();
+      // give a filename
+      const filename = `sticker_${Date.now()}.jpg`;
+      fd.append("sticker", compressedBlob, filename);
+
+      // upload
+      const res = await fetch("/api/tech/upload-sticker", {
+        method: "POST",
+        body: fd,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Upload failed");
+      }
+
+      const data = await res.json();
+      if (!data?.success || !data.url) {
+        throw new Error("Upload did not return URL");
+      }
+
+      setStickerUploadProgress(100);
+      setStickerUploadedUrl(data.url);
+      setForm((p) => ({ ...p, stickerUrl: data.url }));
+
+      toast.success("Sticker uploaded");
+    } catch (err) {
+      console.error("Sticker upload err:", err);
+      toast.error("Sticker upload failed");
+    } finally {
+      setStickerUploading(false);
+      setTimeout(() => setStickerUploadProgress(0), 600);
+    }
+  }
+
+  // trigger hidden file input (camera-first)
+  function openCameraForSticker() {
+    if (!fileInputRef.current) return;
+    // reset value to allow same-file re-select
+    fileInputRef.current.value = null;
+    fileInputRef.current.click();
+  }
+
+  // ======================================================
   //                 SUBMIT FORM
   // ======================================================
   async function submit(e) {
@@ -183,10 +319,11 @@ export default function TechHome() {
     try {
       setSubmitting(true);
       const signature = form.signature || sigRef.current?.toDataURL();
+      // include stickerUrl (if uploaded)
       const r = await fetch("/api/tech/submit-form", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, signature }),
+        body: JSON.stringify({ ...form, signature, stickerUrl: form.stickerUrl }),
       });
       const d = await r.json();
       if (!r.ok) {
@@ -213,9 +350,12 @@ export default function TechHome() {
         phone: "",
         status: "Services Done",
         signature: "",
+        stickerUrl: "",
       });
       setSelectedCall(null);
       clearSig();
+      setStickerPreview(null);
+      setStickerUploadedUrl("");
     } catch (err) {
       console.error(err);
       toast.error("Submit failed");
@@ -344,6 +484,63 @@ export default function TechHome() {
                 <option>Complaint Done</option>
                 <option>Under Process</option>
               </select>
+
+              {/* ---------------- STICKER UPLOAD (Camera Only) ---------------- */}
+              <div>
+                <div className="text-sm font-semibold mb-1">Sticker (Camera)</div>
+
+                <div className="flex gap-2 items-center">
+                  <button
+                    type="button"
+                    onClick={openCameraForSticker}
+                    className="flex-1 bg-green-600 text-white py-2 rounded-lg"
+                    disabled={stickerUploading}
+                  >
+                    {stickerUploading ? "Uploading..." : "Open Camera & Upload Sticker"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // clear sticker
+                      setStickerPreview(null);
+                      setStickerUploadedUrl("");
+                      setForm((p) => ({ ...p, stickerUrl: "" }));
+                    }}
+                    className="px-3 py-2 border rounded-lg text-sm"
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                />
+
+                {stickerPreview && (
+                  <div className="mt-2">
+                    <div className="text-xs text-gray-500 mb-1">Preview</div>
+                    <img
+                      src={stickerPreview}
+                      alt="sticker preview"
+                      className="w-40 h-auto rounded-md border"
+                    />
+                    <div className="text-xs mt-1">
+                      {stickerUploading && (
+                        <div>Uploading... {stickerUploadProgress}%</div>
+                      )}
+                      {!stickerUploading && stickerUploadedUrl && (
+                        <div className="text-green-600 text-xs">Uploaded</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* ---------------- SIGNATURE PAD ---------------- */}
               <div>
@@ -494,7 +691,7 @@ export default function TechHome() {
                   Service Saved Successfully
                 </div>
                 <div className="text-xs text-gray-600">
-                  Client details & signature recorded. Great job! ✨
+                  Client details, signature & sticker recorded. Great job! ✨
                 </div>
               </div>
             </motion.div>
