@@ -183,12 +183,11 @@ export default function TechHome() {
   //               IMAGE COMPRESS & UPLOAD HELPERS
   // ======================================================
 
-  // compressImage: sculpt image via canvas to target size (in bytes)
-  async function compressImageFileToTarget(file, targetBytes = 11 * 1024) {
-    // returns Blob
+  // compressImage: aggressive client-side compression (webp) to target size
+  async function compressImageFileToTarget(file, targetBytes = 6 * 1024) {
     if (!file) throw new Error("No file");
 
-    // helper to create image element from blob
+    // load image element
     const createImage = (blob) =>
       new Promise((res, rej) => {
         const img = new Image();
@@ -197,55 +196,57 @@ export default function TechHome() {
         img.src = URL.createObjectURL(blob);
       });
 
-    // initial read as blob
-    let blob = file;
-    let img = await createImage(blob);
+    const img = await createImage(file);
 
-    // start with current width but cap to maxWidth
-    let maxWidth = 1200;
-    // reduce if huge
-    let width = img.width;
-    let height = img.height;
-    if (width > maxWidth) {
-      const ratio = maxWidth / width;
-      width = Math.round(width * ratio);
-      height = Math.round(height * ratio);
+    // helper to get blob from canvas (webp)
+    const canvasToBlob = (canvas, quality) =>
+      new Promise((resolve) => {
+        // prefer webp where supported
+        const mime = "image/webp";
+        canvas.toBlob(resolve, mime, quality);
+      });
+
+    // start dims
+    let width = Math.min(1000, img.width);
+    let height = Math.round((img.height / img.width) * width);
+    if (!width || !height) {
+      width = 600;
+      height = 400;
     }
 
-    // iterative reduce: first reduce quality steps, then scale down if needed
+    // iterative attempts
     let quality = 0.85;
-    for (let pass = 0; pass < 8; pass++) {
+    let lastBlob = null;
+
+    for (let pass = 0; pass < 10; pass++) {
       const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = Math.max(96, Math.round(width));
+      canvas.height = Math.max(96, Math.round(height));
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, width, height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // try toBlob
-      // prefer jpeg
-      const blobCandidate = await new Promise((resolve) =>
-        canvas.toBlob(resolve, "image/jpeg", quality)
-      );
+      const blob = await canvasToBlob(canvas, quality);
+      if (!blob) throw new Error("Compression failed");
 
-      if (!blobCandidate) throw new Error("Compression failed");
+      lastBlob = blob;
 
-      if (blobCandidate.size <= targetBytes || quality < 0.15) {
-        return blobCandidate;
+      // if small enough return
+      if (blob.size <= targetBytes) {
+        return blob;
       }
 
-      // decrease quality and maybe size
-      quality = quality - 0.12; // reduce quality
-      if (quality < 0.2) {
-        // scale down dimensions too
-        width = Math.round(width * 0.8);
-        height = Math.round(height * 0.8);
+      // reduce quality and size progressively
+      if (quality > 0.18) {
+        quality = Math.max(0.12, quality - 0.14);
+      } else {
+        width = Math.max(96, Math.round(width * 0.75));
+        height = Math.max(96, Math.round((img.height / img.width) * width));
         quality = 0.6;
       }
-      // loop continues
     }
 
-    // final fallback: return last candidate but it might be larger than target
-    return blob;
+    // fallback: return last attempt
+    return lastBlob;
   }
 
   async function handleFileInputChange(e) {
@@ -256,22 +257,29 @@ export default function TechHome() {
       setStickerUploading(true);
       setStickerUploadProgress(5);
 
-      // create preview first (fast)
+      // create preview fast
       const reader = new FileReader();
       reader.onload = () => setStickerPreview(reader.result);
       reader.readAsDataURL(f);
 
-      // compress aggressively to ~10KB range
-      const targetKB = 10 * 1024; // bytes
-      const compressedBlob = await compressImageFileToTarget(f, targetKB);
+      // compress aggressively to ~6KB range (client-side)
+      const targetBytes = 6 * 1024; // ~6KB
+      const compressedBlob = await compressImageFileToTarget(f, targetBytes);
 
       setStickerUploadProgress(30);
 
+      // debug: show compressed size in console
+      try {
+        // eslint-disable-next-line no-console
+        console.log("Client compressed size:", compressedBlob.size);
+      } catch {}
+
       // upload to server via FormData
       const fd = new FormData();
-      // give a filename
-      const filename = `sticker_${Date.now()}.jpg`;
+      const filename = `sticker_${Date.now()}.webp`;
       fd.append("sticker", compressedBlob, filename);
+
+      setStickerUploadProgress(50);
 
       // upload
       const res = await fetch("/api/tech/upload-sticker", {
@@ -280,6 +288,7 @@ export default function TechHome() {
       });
 
       if (!res.ok) {
+        // try to parse error message
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Upload failed");
       }
@@ -292,7 +301,6 @@ export default function TechHome() {
       setStickerUploadProgress(100);
       setStickerUploadedUrl(data.url);
       setForm((p) => ({ ...p, stickerUrl: data.url }));
-
       toast.success("Sticker uploaded");
     } catch (err) {
       console.error("Sticker upload err:", err);
