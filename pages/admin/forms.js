@@ -224,14 +224,11 @@ export default function AdminForms() {
                             target="_blank"
                             rel="noopener noreferrer"
                           >
-                           {forms.map((row) => (
-  <img
-    key={row._id}
-    src={`${row.stickerUrl}?v=${row.updatedAt || row.createdAt || Date.now()}`}
-    alt="sticker"
-    style={{ width: "40px", height: "40px", objectFit: "cover" }}
-  />
-))}
+                            <img
+                              src={it.stickerUrl}
+                              alt="sticker"
+                              className="h-10 rounded border hover:scale-105 transition cursor-pointer"
+                            />
                           </a>
                         ) : (
                           "-"
