@@ -1,7 +1,6 @@
 // server.js
-// Custom Next.js server using Express that serves persistent uploads directory.
-// Place this at project root and run with: NODE_ENV=production node server.js
-
+// Custom Next.js + Express server to serve persistent uploads
+// Usage: NODE_ENV=production node server.js
 const express = require("express");
 const next = require("next");
 const path = require("path");
@@ -11,14 +10,18 @@ const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-// PERSISTENT UPLOADS PATH — make sure this folder exists on the VPS
-// This path is outside the project build and will persist across deploys.
-const UPLOADS_DIR = "/var/www/chimney-uploads";
+// In production we serve uploads from this persistent folder (create on VPS)
+const PROD_UPLOADS_DIR = process.env.UPLOADS_DIR || "/var/www/chimney-uploads";
+// In development use project public/uploads for convenience
+const DEV_UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
+
+// Choose folder based on environment
+const UPLOADS_DIR = dev ? DEV_UPLOADS_DIR : PROD_UPLOADS_DIR;
 
 app.prepare().then(() => {
   const server = express();
 
-  // Ensure uploads folder exists (best-effort)
+  // Ensure folder exists
   try {
     if (!fs.existsSync(UPLOADS_DIR)) {
       fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -28,7 +31,7 @@ app.prepare().then(() => {
     console.warn("Could not ensure uploads dir:", e.message || e);
   }
 
-  // Serve /uploads/* from the persistent folder (cache long)
+  // Serve uploads statically at /uploads
   server.use(
     "/uploads",
     express.static(UPLOADS_DIR, {
@@ -37,10 +40,8 @@ app.prepare().then(() => {
     })
   );
 
-  // Any other requests -> Next.js
-  server.all("*", (req, res) => {
-    return handle(req, res);
-  });
+  // Next handler for all other routes
+  server.all("*", (req, res) => handle(req, res));
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, (err) => {
