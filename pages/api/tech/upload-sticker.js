@@ -79,6 +79,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const ext =
       path.extname(file.originalname || "").toLowerCase() || ".jpg";
+
     const safeExt = [".jpg", ".jpeg", ".png", ".webp"].includes(ext)
       ? ext
       : ".jpg";
@@ -92,7 +93,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB RAW allowed
   fileFilter: (req, file, cb) => {
     if (!file.mimetype || !file.mimetype.startsWith("image/")) {
       return cb(new Error("Only image files allowed"));
@@ -102,7 +103,7 @@ const upload = multer({
 }).single("sticker");
 
 // =====================================================
-// SHARP COMPRESSION CONFIG
+// SHARP COMPRESSION CONFIG (ULTRA HARD)
 // =====================================================
 const TARGET_BYTES = 6 * 1024; // ~6KB
 const OUTPUT_WIDTH = 64;
@@ -125,7 +126,7 @@ async function compressImage(buffer) {
 // HANDLER
 // =====================================================
 export default function handler(req, res) {
-  // make sure old images are visible
+  // ensure legacy images become visible automatically
   migrateLegacyImagesOnce();
 
   if (req.method !== "POST") {
@@ -136,7 +137,7 @@ export default function handler(req, res) {
     // -------- multer error --------
     if (err) {
       if (req.file?.path) {
-        fs.promises.unlink(req.file.path).catch(() => {});
+        await fs.promises.unlink(req.file.path).catch(() => {});
       }
 
       return res.status(400).json({
@@ -169,7 +170,7 @@ export default function handler(req, res) {
       await fs.promises.writeFile(finalPath, compressed);
       await fs.promises.chmod(finalPath, 0o644);
 
-      // cleanup temp
+      // cleanup temp file
       await fs.promises.unlink(tempPath).catch(() => {});
 
       return res.status(200).json({
