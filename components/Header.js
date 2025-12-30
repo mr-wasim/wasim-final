@@ -1,10 +1,10 @@
 // components/Header.js
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    FiMenu,
+  FiMenu,
   FiX,
   FiUser,
   FiHome,
@@ -17,7 +17,7 @@ import {
   FiEdit,
   FiArrowRight,
   FiPhoneForwarded,
-  FiUserCheck
+  FiUserCheck,
 } from "react-icons/fi";
 
 /** Safe, SSR-friendly reduced-motion hook */
@@ -33,20 +33,67 @@ function useSafeReducedMotion() {
       return () => mq.removeEventListener("change", update);
     } else {
       mq.addListener(update);
-      return () => mq.removeListener(update);
+      return () => mq.removeListener("change", update);
     }
   }, []);
   return reduced;
 }
 
-export default function Header({
-  user = { role: "technician", name: "User", id: "" },
-}) {
+export default function Header({ user = { role: "technician", name: "User", id: "" } }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const shouldReduceMotion = useSafeReducedMotion();
+
+  // local "me" state - prefer prop but fetch fresh if needed (avatar etc.)
+  const [me, setMe] = useState(user);
+  const [imgError, setImgError] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    // keep me in sync with prop when prop changes
+    setMe(user);
+  }, [user]);
+
+  useEffect(() => {
+    // fetch fresh auth/me only on client and if role is technician and avatar missing
+    if (typeof window === "undefined") return;
+    if (!user) return;
+
+    // Only fetch if user is technician and avatar is missing (or we want freshest)
+    if (user.role !== "technician") return;
+
+    // If avatar already present on prop, no need to fetch
+    if (user.avatar) return;
+
+    const ac = new AbortController();
+    const sig = ac.signal;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "same-origin", signal: sig });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mountedRef.current) return;
+        // merge fields so we don't accidentally remove fields from prop
+        setMe((prev) => ({ ...(prev || {}), ...(data || {}) }));
+      } catch (err) {
+        // ignore fetch aborts / network errors silently
+      }
+    })();
+
+    return () => {
+      ac.abort();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -74,50 +121,38 @@ export default function Header({
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
     } catch {}
     finally { safeNavigate("/login"); }
   };
 
- const navLinks = useMemo(
-  () => ({
-    admin: [
-      { href: "/admin", label: "Dashboard", icon: <FiHome /> },
-      { href: "/admin/forms", label: "Customer Service Forms", icon: <FiFileText /> },
+  const navLinks = useMemo(
+    () => ({
+      admin: [
+        { href: "/admin", label: "Dashboard", icon: <FiHome /> },
+        { href: "/admin/forms", label: "Customer Service Forms", icon: <FiFileText /> },
+        { href: "/admin/forward", label: "New Call Assign", icon: <FiPhoneForwarded /> },
+        { href: "/admin/all-calls", label: "Edit Calls", icon: <FiEdit /> },
+        { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
+        { href: "/admin/technician-calls", label: "Technician Call Details", icon: <FiUserCheck /> },
+        { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
+        { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
+        { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus /> },
+      ],
 
-      // Forward Call (Best Icon)
-      { href: "/admin/forward", label: "New Call Assign", icon: <FiPhoneForwarded /> },
+      technician: [
+        { href: "/tech", label: "Dashboard", icon: <FiHome /> },
+        { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign /> },
+      ],
+    }),
+    []
+  );
 
-      // Forwarded Calls
-      // { href: "/admin/forwarded", label: "All Customers", icon: <FiUsers /> },
+  const links = navLinks[me?.role] || [];
+  const isActive = (href) => router.pathname === href || router.pathname?.startsWith(href + "/");
 
-      // Edit Calls – EDIT ICON
-      { href: "/admin/all-calls", label: "Edit Calls", icon: <FiEdit /> },
-
-      { href: "/admin/all-customers", label: "All Customers", icon: <FiUsers /> },
-
-      // Technician Calls – TECHNICIAN ICON
-      { href: "/admin/technician-calls", label: "Technician Call Details", icon: <FiUserCheck /> },
-
-      { href: "/admin/payments", label: "Payments / Reports", icon: <FiDollarSign /> },
-      { href: "/admin/techs", label: "Technicians", icon: <FiUsers /> },
-      { href: "/admin/create-tech", label: "Create Technician", icon: <FiPlus /> },
-    ],
-
-    technician: [
-      { href: "/tech", label: "Dashboard", icon: <FiHome /> },
-      { href: "/tech/payments", label: "Payment Mode", icon: <FiDollarSign /> },
-    ],
-  }),
-  []
-);
-
-
-  const links = navLinks[user?.role] || [];
-  const isActive = (href) =>
-    router.pathname === href || router.pathname?.startsWith(href + "/");
-
-  const initials = (name) => {
+  const initials = (nameOrUsername) => {
+    const name = nameOrUsername || me?.username || me?.name || "";
     const chars = (name || "")
       .trim()
       .split(/\s+/)
@@ -127,7 +162,10 @@ export default function Header({
     return chars || "U";
   };
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin = me?.role === "admin";
+
+  // avatar helper - show image only if present and not errored
+  const avatarUrl = !imgError && (me?.avatar || me?.avatarUrl || null);
 
   return (
     <>
@@ -141,7 +179,6 @@ export default function Header({
         role="banner"
       >
         <div className="max-w-screen-2xl mx-auto flex items-center justify-between px-3 sm:px-6 py-3">
-
           {/* LEFT SIDE */}
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -239,10 +276,19 @@ export default function Header({
                 aria-expanded={profileOpen}
                 className="flex items-center gap-2 bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-sm text-white font-semibold shadow-inner transition active:scale-95"
               >
-                <div className="h-7 w-7 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center">
-                  <span className="text-[11px] font-bold">{initials(user?.name)}</span>
+                <div className="h-7 w-7 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center overflow-hidden">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt={me?.username || me?.name || "profile"}
+                      className="h-full w-full object-cover"
+                      onError={() => setImgError(true)}
+                    />
+                  ) : (
+                    <span className="text-[11px] font-bold">{initials(me?.displayName || me?.username || me?.name)}</span>
+                  )}
                 </div>
-                <span className="hidden sm:block max-w-[140px] truncate">{user?.name || "Profile"}</span>
+                <span className="hidden sm:block max-w-[140px] truncate">{me?.displayName || me?.username || me?.name || "Profile"}</span>
                 <FiUser aria-hidden="true" className="opacity-80" />
               </button>
 
@@ -258,11 +304,11 @@ export default function Header({
                   >
                     <div className="px-4 py-3 border-b border-gray-100">
                       <p className="text-xs uppercase tracking-wider text-gray-500">Signed in as</p>
-                      <p className="text-sm font-semibold text-gray-900 truncate">{user?.name || "User"}</p>
-                      <p className="text-[11px] text-gray-500">Role: {user?.role || "guest"}</p>
+                      <p className="text-sm font-semibold text-gray-900 truncate">{me?.displayName || me?.username || me?.name || "User"}</p>
+                      <p className="text-[11px] text-gray-500">Role: {me?.role || "guest"}</p>
                     </div>
                     <Link
-                      href={user?.role === "admin" ? "/admin" : "/tech/profile"}
+                      href={me?.role === "admin" ? "/admin" : "/tech/profile"}
                       className="flex items-center gap-2 px-4 py-2.5 text-gray-700 hover:bg-blue-50 transition text-sm"
                       role="menuitem"
                       onClick={() => setProfileOpen(false)}
@@ -324,7 +370,7 @@ export default function Header({
               </div>
 
               <p className="text-xs uppercase tracking-wider text-white/80 mb-3">
-                {user?.role === "admin" ? "Admin Menu" : "Technician Menu"}
+                {me?.role === "admin" ? "Admin Menu" : "Technician Menu"}
               </p>
 
               <div className="space-y-1">
@@ -334,9 +380,7 @@ export default function Header({
                     href={link.href}
                     className={[
                       "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition",
-                      isActive(link.href)
-                        ? "bg-white/20 ring-1 ring-white/20"
-                        : "hover:bg-white/10",
+                      isActive(link.href) ? "bg-white/20 ring-1 ring-white/20" : "hover:bg-white/10",
                     ].join(" ")}
                     onClick={() => setMenuOpen(false)}
                   >
