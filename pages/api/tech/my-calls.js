@@ -5,13 +5,7 @@ import { ObjectId } from "mongodb";
 /**
  * Returns forwarded calls for the logged-in technician.
  * Each item includes paymentStatus: "Paid" | "Pending"
- *
- * Payment is considered present if:
- *  - a payment document references the callId in payments.calls.callId
- *  OR
- *  - any payment.calls[] entry has normalized (name|phone|address) AND price equal to forwarded call
- *
- * Supports pageSize param (default 10). For lifetime modal, client may request pageSize=1000.
+ * Now also returns chooseCall (raw) and chooseLabel (human-friendly).
  */
 
 function normalizeForKey(s = "") {
@@ -63,7 +57,7 @@ async function handler(req, res, user) {
 
     const skip = (page - 1) * pageSize;
 
-    // fetch forwarded calls slice (we request pageSize + 1 to detect hasMore)
+    // fetch forwarded calls slice (request pageSize + 1 to detect hasMore)
     const docs = await forwardedColl
       .find(match)
       .sort({ createdAt: -1 })
@@ -87,6 +81,8 @@ async function handler(req, res, user) {
         timeZone: 1,
         notes: 1,
         paymentStatus: 1,
+        chooseCall: 1, // <-- NEW: include chooseCall in projection
+        techName: 1,
       })
       .toArray();
 
@@ -95,21 +91,32 @@ async function handler(req, res, user) {
 
     // Build arrays to query payments efficiently
     const callIdsAll = slice.map((c) => String(c._id));
+    const pricesSet = Array.from(new Set(slice.map((c) => Number(c.price || 0))));
 
-    // We will fetch payments that reference these callIds OR payments by this tech
-    const paymentsCursor = paymentsColl.find({
+    // If no calls, return fast
+    if (slice.length === 0) {
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.status(200).json({ success: true, items: [], page, pageSize, hasMore });
+    }
+
+    // Optimized payments query:
+    //  - payments that reference these callIds OR
+    //  - payments by this tech that have calls with matching price (narrow down)
+    const paymentsQuery = {
       $or: [
         { "calls.callId": { $in: callIdsAll } },
-        { techId: { $in: techIds } },
+        { techId: { $in: techIds }, "calls.price": { $in: pricesSet } },
       ],
-    });
+    };
+
+    // Only fetch calls array to keep payload small
+    const payments = await paymentsColl.find(paymentsQuery).project({ calls: 1 }).toArray();
 
     // Build sets
     const paidByCallId = new Set();
     const paidKeyWithPrice = new Set(); // key: normalizedName|phone|address|price
 
-    while (await paymentsCursor.hasNext()) {
-      const pay = await paymentsCursor.next();
+    for (const pay of payments) {
       if (!pay || !Array.isArray(pay.calls)) continue;
       for (const pc of pay.calls) {
         if (!pc) continue;
@@ -118,7 +125,7 @@ async function handler(req, res, user) {
         const phone = normalizePhone(pc.phone || pc.mobile || pc.contact || "");
         const address = normalizeForKey(pc.address || pc.addr || pc.location || "");
         const price = Number(pc.price || pc.amount || pc.total || 0);
-        if (name || phone || address) {
+        if (name || phone || address || price) {
           const key = `${name}|${phone}|${address}|${price}`;
           paidKeyWithPrice.add(key);
         }
@@ -132,7 +139,18 @@ async function handler(req, res, user) {
       const address = i.address ?? i.addr ?? i.location ?? "";
       const price = Number(i.price || 0);
       const key = `${normalizeForKey(clientName)}|${normalizePhone(phone)}|${normalizeForKey(address)}|${price}`;
-      const isPaid = paidByCallId.has(String(i._id)) || paidKeyWithPrice.has(key) || (i.paymentStatus && String(i.paymentStatus).toLowerCase().includes("paid"));
+      const isPaid =
+        paidByCallId.has(String(i._id)) ||
+        paidKeyWithPrice.has(key) ||
+        (i.paymentStatus && String(i.paymentStatus).toLowerCase().includes("paid"));
+
+      // chooseCall raw + human friendly label
+      const chooseRaw = i.chooseCall ?? "";
+      const chooseLabel =
+        String(chooseRaw || "")
+          .replace(/_/g, " ")
+          .replace(/\s+/g, " ")
+          .trim() || "";
 
       return {
         _id: String(i._id),
@@ -146,6 +164,9 @@ async function handler(req, res, user) {
         timeZone: i.timeZone ?? "",
         notes: i.notes ?? "",
         paymentStatus: isPaid ? "Paid" : "Pending",
+        chooseCall: chooseRaw,      // raw value (e.g., CHIMNEY_SOLUTIONS)
+        chooseLabel,               // human label (e.g., "CHIMNEY SOLUTIONS")
+        techName: i.techName ?? "",
       };
     });
 

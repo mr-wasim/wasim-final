@@ -9,7 +9,6 @@ const forwardSound = typeof window !== "undefined"
   ? new Audio("/forward.mp3")
   : null;
 
-// ⛔ No re-render inputs → using refs (FASTEST)
 export default function Forward() {
   const [user, setUser] = useState(null);
   const [techs, setTechs] = useState([]);
@@ -24,6 +23,7 @@ export default function Forward() {
   const timeZoneRef = useRef();
   const notesRef = useRef();
   const techRef = useRef();
+  const chooseRef = useRef(); // <-- NEW: Choose Call
 
   // ============== ULTRA FAST DATA LOAD ==============
   useEffect(() => {
@@ -67,17 +67,26 @@ export default function Forward() {
         timeZone: timeZoneRef.current.value.trim(),
         notes: notesRef.current.value.trim(),
         techId: techRef.current.value,
+        chooseCall: chooseRef.current.value, // <-- NEW
       };
 
-      if (!payload.clientName || !payload.phone || !payload.address || !payload.techId) {
-        toast.error("All required fields must be filled");
+      if (
+        !payload.clientName ||
+        !payload.phone ||
+        !payload.address ||
+        !payload.techId ||
+        !payload.chooseCall
+      ) {
+        toast.error("All required fields must be filled (including Choose Call)");
         return;
       }
 
       // ⭐ PLAY INSTANT SOUND
       try {
-        forwardSound.currentTime = 0;
-        forwardSound.play().catch(() => {});
+        if (forwardSound) {
+          forwardSound.currentTime = 0;
+          forwardSound.play().catch(() => {});
+        }
       } catch {}
 
       startTransition(async () => {
@@ -106,6 +115,7 @@ export default function Forward() {
           timeZoneRef.current.value = "";
           notesRef.current.value = "";
           techRef.current.value = "";
+          chooseRef.current.value = ""; // reset choose
         } catch (err) {
           console.error(err);
           toast.error("Network error");
@@ -139,6 +149,16 @@ export default function Forward() {
 
             <textarea ref={notesRef} className="input border p-2 rounded" placeholder="Notes" rows={3} />
 
+                {/* ===== NEW: Choose Call field ===== */}
+            <label className="text-sm font-medium">Choose Call</label>
+            <select ref={chooseRef} className="input border p-2 rounded" required defaultValue="">
+              <option value="" disabled>
+                -- Select Call Type --
+              </option>
+              <option value="CHIMNEY_SOLUTIONS">CHIMNEY SOLUTIONS</option>
+              <option value="TKS">TKS</option>
+            </select>
+
             <select ref={techRef} className="input border p-2 rounded" required>
               <option value="">Select Technician</option>
               {techs.map((t) => (
@@ -147,6 +167,8 @@ export default function Forward() {
                 </option>
               ))}
             </select>
+
+        
 
             <button
               disabled={loading}

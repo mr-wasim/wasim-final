@@ -12,7 +12,6 @@ import { getDb, requireRole } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 import { sendNotification } from "../../../lib/sendNotification.js";
 
-
 // ------------ WhatsApp Sender (NON-BLOCKING) ------------
 async function sendWhatsAppMessage(phone, clientName, serviceType) {
   try {
@@ -45,12 +44,10 @@ async function sendWhatsAppMessage(phone, clientName, serviceType) {
       .then((r) => r.json())
       .then((d) => console.log("📨 WA SENT BG:", d))
       .catch((e) => console.error("❌ WA BG ERROR:", e));
-
   } catch (err) {
     console.error("❌ WhatsApp Catch Error:", err);
   }
 }
-
 
 // ------------ Core Forward Logic (Ultra Fast) ------------
 async function forwardCore(req, res, user) {
@@ -73,12 +70,13 @@ async function forwardCore(req, res, user) {
       jobType,
       timeZone,
       notes,
+      chooseCall, // <-- NEW
     } = req.body || {};
 
     const finalType =
       type || serviceType || service || category || jobType || "Service";
 
-    if (!clientName || !phone || !address || !techId) {
+    if (!clientName || !phone || !address || !techId || !chooseCall) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -105,46 +103,59 @@ async function forwardCore(req, res, user) {
       techId: tech._id,
       techName: tech.username,
       status: "Pending",
+      chooseCall, // store the choice
       createdAt: new Date(),
     };
 
     const result = await db.collection("forwarded_calls").insertOne(insertDoc);
     const insertedId = result.insertedId.toString();
 
-    // ⭐ ULTRA FAST RESPONSE (0.01 sec)
+    // ⭐ ULTRA FAST RESPONSE — immediate
     res.status(200).json({ ok: true, id: insertedId });
 
-    // ⭐ Background Tasks (NON-BLOCKING)
+    // ⭐ Background Tasks (NON-BLOCKING) — run after tiny delay
     setTimeout(async () => {
-      // WhatsApp Background
-      sendWhatsAppMessage(insertDoc.phone, clientName, finalType);
-
-      // FCM Background
       try {
-        const fcmToken = await db.collection("fcm_tokens").findOne({
-          userId: techId,
-          role: "technician",
-        });
-
-        if (fcmToken?.token) {
-          sendNotification(
-            fcmToken.token,
-            "📞 New Call Assigned",
-            `Client ${clientName} (${insertDoc.phone}) assigned to you.`,
-            { forwardedCallId: insertedId }
-          );
+        // WhatsApp Background: ONLY when CHIMNEY_SOLUTIONS chosen
+        if (chooseCall === "CHIMNEY_SOLUTIONS") {
+          try {
+            sendWhatsAppMessage(insertDoc.phone, clientName, finalType);
+            console.log("ℹ️ WhatsApp template queued (CHIMNEY_SOLUTIONS).");
+          } catch (waErr) {
+            console.error("⚠ WA send error:", waErr);
+          }
+        } else {
+          console.log("ℹ️ WhatsApp template skipped (not CHIMNEY_SOLUTIONS).");
         }
-      } catch (err) {
-        console.log("⚠ FCM BG Error:", err);
+
+        // FCM Background (always send notification to technician)
+        try {
+          const fcmToken = await db.collection("fcm_tokens").findOne({
+            userId: techId,
+            role: "technician",
+          });
+
+          if (fcmToken?.token) {
+            sendNotification(
+              fcmToken.token,
+              "📞 New Call Assigned",
+              `Client ${clientName} (${insertDoc.phone}) assigned to you.`,
+              { forwardedCallId: insertedId }
+            );
+          }
+        } catch (err) {
+          console.log("⚠ FCM BG Error:", err);
+        }
+      } catch (bgErr) {
+        console.log("⚠ Background task overall error:", bgErr);
       }
-    }, 5); // run background after 5ms
+    }, 5); // keep small delay so main response stays immediate
 
   } catch (err) {
     console.error("❌ Forward Error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 }
-
 
 // ------------ Export Handler ------------
 export default async function handler(req, res) {
