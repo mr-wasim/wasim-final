@@ -1,4 +1,3 @@
-// pages/api/admin/technician-calls.js
 export const runtime = "nodejs";
 
 import { getDb, requireRole } from "../../../lib/api-helpers.js";
@@ -13,108 +12,295 @@ async function handler(req, res, user) {
     const db = await getDb();
     const callsColl = db.collection("forwarded_calls");
     const techsColl = db.collection("technicians");
+    const paymentsColl = db.collection("payments"); // assumed collection name
 
-    let { month = "", techId = "" } = req.query;
+    // query params
+    let { month = "", techId = "", dateFrom = "", dateTo = "" } = req.query;
 
-    // Resolve month range
-    let start, end;
-    if (typeof month === "string" && /^\d{4}-\d{2}$/.test(month)) {
-      const [y, m] = month.split("-").map((n) => parseInt(n, 10));
-      start = new Date(y, m - 1, 1, 0, 0, 0, 0);
-      end = new Date(y, m, 1, 0, 0, 0, 0);
-    } else {
-      const now = new Date();
-      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-    }
-
-    // base match for closed calls
-    const baseMatch = { status: "Closed" };
-
+    // build tech filter
     const techCandidates = [];
-    if (techId && typeof techId === "string") {
+    if (techId && typeof techId === "string" && techId !== "all") {
       techCandidates.push(techId);
       if (ObjectId.isValid(techId)) techCandidates.push(new ObjectId(techId));
     }
 
-    if (techCandidates.length) {
-      baseMatch.techId = { $in: techCandidates };
+    // Resolve date window: prefer dateFrom/dateTo if provided, otherwise month
+    let start, end;
+    if (dateFrom && dateTo) {
+      // date inputs are in YYYY-MM-DD
+      start = new Date(dateFrom + "T00:00:00.000Z");
+      end = new Date(new Date(dateTo + "T00:00:00.000Z").getTime() + 24 * 3600 * 1000);
+    } else if (typeof month === "string" && /^\d{4}-\d{2}$/.test(month)) {
+      const [y, m] = month.split("-").map((n) => parseInt(n, 10));
+      start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+      end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));
+    } else {
+      const now = new Date();
+      start = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+      end = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0));
     }
 
-    // Month-specific match
+    // Helper: tech filter object for mongo match
+    const techFilter =
+      techCandidates.length > 0 ? { techId: { $in: techCandidates } } : {};
+
+    // We'll treat "closeDate" as closedAt if present else createdAt
+    // --- Aggregation: per-tech month stats (closed calls, sums from payments) ---
     const monthMatch = {
-      ...baseMatch,
-      createdAt: { $gte: start, $lt: end },
+      status: "Closed",
+      $expr: {
+        $and: [
+          {
+            $gte: [
+              {
+                $ifNull: ["$closedAt", "$createdAt"],
+              },
+              start,
+            ],
+          },
+          {
+            $lt: [
+              {
+                $ifNull: ["$closedAt", "$createdAt"],
+              },
+              end,
+            ],
+          },
+        ],
+      },
+      ...techFilter,
     };
 
-    // ---- Aggregation: per-tech month stats ----
     const monthStatsArr = await callsColl
       .aggregate([
-        { $match: { status: "Closed", createdAt: { $gte: start, $lt: end } } },
+        { $match: monthMatch },
+        // lookup payments for each call, sum
+        {
+          $lookup: {
+            from: "payments",
+            let: { callId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: "$callId" }, { $toString: "$$callId" }],
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  paidSum: { $sum: { $ifNull: ["$amount", 0] } },
+                },
+              },
+            ],
+            as: "payment_sum",
+          },
+        },
+        {
+          $addFields: {
+            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+          },
+        },
         {
           $group: {
             _id: "$techId",
             monthClosed: { $sum: 1 },
-            monthAmount: { $sum: { $ifNull: ["$price", 0] } },
+            monthAmount: { $sum: "$paymentTotal" },
           },
         },
       ])
       .toArray();
 
     const monthMap = new Map();
-    monthStatsArr.forEach((row) => {
-      const key = String(row._id);
-      monthMap.set(key, {
-        monthClosed: row.monthClosed || 0,
-        monthAmount: row.monthAmount || 0,
+    monthStatsArr.forEach((r) => {
+      monthMap.set(String(r._id), {
+        monthClosed: r.monthClosed || 0,
+        monthAmount: r.monthAmount || 0,
       });
     });
 
-    // ---- Aggregation: per-tech lifetime stats ----
+    // ---- Aggregation: per-tech lifetime stats (closed) ----
     const lifetimeStatsArr = await callsColl
       .aggregate([
-        { $match: { status: "Closed" } },
+        { $match: { status: "Closed", ...techFilter } },
+        {
+          $lookup: {
+            from: "payments",
+            let: { callId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: "$callId" }, { $toString: "$$callId" }],
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  paidSum: { $sum: { $ifNull: ["$amount", 0] } },
+                },
+              },
+            ],
+            as: "payment_sum",
+          },
+        },
+        {
+          $addFields: {
+            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+          },
+        },
         {
           $group: {
             _id: "$techId",
             totalClosed: { $sum: 1 },
-            totalAmount: { $sum: { $ifNull: ["$price", 0] } },
+            totalAmount: { $sum: "$paymentTotal" },
           },
         },
       ])
       .toArray();
 
     const lifetimeMap = new Map();
-    lifetimeStatsArr.forEach((row) => {
-      const key = String(row._id);
-      lifetimeMap.set(key, {
-        totalClosed: row.totalClosed || 0,
-        totalAmount: row.totalAmount || 0,
+    lifetimeStatsArr.forEach((r) => {
+      lifetimeMap.set(String(r._id), {
+        totalClosed: r.totalClosed || 0,
+        totalAmount: r.totalAmount || 0,
       });
     });
 
-    // ---- Summary for selected filter (month + lifetime) ----
-    const monthSummaryArr = await callsColl
+    // ---- Per-tech pending/cancelled counts (month & lifetime) ----
+    // month pending/cancelled
+    const monthPendingArr = await callsColl
       .aggregate([
-        { $match: monthMatch },
+        {
+          $match: {
+            status: "Pending",
+            $expr: {
+              $and: [
+                {
+                  $gte: [{ $ifNull: ["$createdAt", "$$NOW"] }, start],
+                },
+                {
+                  $lt: [{ $ifNull: ["$createdAt", "$$NOW"] }, end],
+                },
+              ],
+            },
+            ...techFilter,
+          },
+        },
         {
           $group: {
-            _id: null,
-            monthClosed: { $sum: 1 },
-            monthAmount: { $sum: { $ifNull: ["$price", 0] } },
+            _id: "$techId",
+            monthPending: { $sum: 1 },
+            monthPendingAmount: { $sum: { $ifNull: ["$price", 0] } },
           },
         },
       ])
       .toArray();
 
+    const monthPendingMap = new Map();
+    monthPendingArr.forEach((r) => {
+      monthPendingMap.set(String(r._id), {
+        monthPending: r.monthPending || 0,
+        monthPendingAmount: r.monthPendingAmount || 0,
+      });
+    });
+
+    const lifetimePendingArr = await callsColl
+      .aggregate([
+        {
+          $match: {
+            status: "Pending",
+            ...techFilter,
+          },
+        },
+        {
+          $group: {
+            _id: "$techId",
+            totalPending: { $sum: 1 },
+            totalPendingAmount: { $sum: { $ifNull: ["$price", 0] } },
+          },
+        },
+      ])
+      .toArray();
+
+    const lifetimePendingMap = new Map();
+    lifetimePendingArr.forEach((r) => {
+      lifetimePendingMap.set(String(r._id), {
+        totalPending: r.totalPending || 0,
+        totalPendingAmount: r.totalPendingAmount || 0,
+      });
+    });
+
+    // ---- Summary top-level (month + lifetime) ----
+    // month summary (closed)
+    const monthSummaryArr = await callsColl
+      .aggregate([
+        { $match: monthMatch },
+        {
+          $lookup: {
+            from: "payments",
+            let: { callId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: "$callId" }, { $toString: "$$callId" }],
+                  },
+                },
+              },
+              { $group: { _id: null, paidSum: { $sum: { $ifNull: ["$amount", 0] } } } },
+            ],
+            as: "payment_sum",
+          },
+        },
+        {
+          $addFields: {
+            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            monthClosed: { $sum: 1 },
+            monthAmount: { $sum: "$paymentTotal" },
+          },
+        },
+      ])
+      .toArray();
+
+    // lifetime summary (closed)
     const lifetimeSummaryArr = await callsColl
       .aggregate([
-        { $match: baseMatch },
+        { $match: { status: "Closed", ...techFilter } },
+        {
+          $lookup: {
+            from: "payments",
+            let: { callId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: "$callId" }, { $toString: "$$callId" }],
+                  },
+                },
+              },
+              { $group: { _id: null, paidSum: { $sum: { $ifNull: ["$amount", 0] } } } },
+            ],
+            as: "payment_sum",
+          },
+        },
+        {
+          $addFields: {
+            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+          },
+        },
         {
           $group: {
             _id: null,
             totalClosed: { $sum: 1 },
-            totalAmount: { $sum: { $ifNull: ["$price", 0] } },
+            totalAmount: { $sum: "$paymentTotal" },
           },
         },
       ])
@@ -127,7 +313,7 @@ async function handler(req, res, user) {
       totalAmount: lifetimeSummaryArr[0]?.totalAmount || 0,
     };
 
-    // ---- Technician list ----
+    // ---- Technicians list (with avatar & per-tech stats merged) ----
     const techDocs = await techsColl
       .find(
         {},
@@ -139,6 +325,8 @@ async function handler(req, res, user) {
             techName: 1,
             username: 1,
             phone: 1,
+            avatar: 1,
+            profileImage: 1,
           },
         }
       )
@@ -147,37 +335,81 @@ async function handler(req, res, user) {
 
     const technicians = techDocs.map((t) => {
       const key = String(t._id);
-      const monthStat = monthMap.get(key) || {
-        monthClosed: 0,
-        monthAmount: 0,
-      };
-      const lifeStat = lifetimeMap.get(key) || {
-        totalClosed: 0,
-        totalAmount: 0,
-      };
+      const monthStat = monthMap.get(key) || { monthClosed: 0, monthAmount: 0 };
+      const lifeStat = lifetimeMap.get(key) || { totalClosed: 0, totalAmount: 0 };
+      const mpending = monthPendingMap.get(key) || { monthPending: 0, monthPendingAmount: 0 };
+      const lpending = lifetimePendingMap.get(key) || { totalPending: 0, totalPendingAmount: 0 };
 
-      const displayName =
-        t.name || t.fullName || t.techName || t.username || "Unnamed";
+      const displayName = t.name || t.fullName || t.techName || t.username || "Unnamed";
 
       return {
         _id: key,
         name: displayName,
         username: t.username || "",
         phone: t.phone || "",
+        avatar: t.avatar || t.profileImage || "",
         monthClosed: monthStat.monthClosed,
         monthAmount: monthStat.monthAmount,
         totalClosed: lifeStat.totalClosed,
         totalAmount: lifeStat.totalAmount,
+        monthPending: mpending.monthPending || 0,
+        monthPendingAmount: mpending.monthPendingAmount || 0,
+        totalPending: lpending.totalPending || 0,
+        totalPendingAmount: lpending.totalPendingAmount || 0,
       };
     });
 
-    // ---- Calls list for selected tech + month ----
+    // ---- Calls list for selected tech + period (all statuses) ----
     let calls = [];
     if (techCandidates.length) {
+      // match by tech and date window on createdAt (so pending/cancelled appear)
+      const callsMatch = {
+        techId: { $in: techCandidates },
+        $expr: {
+          $and: [
+            { $gte: ["$createdAt", start] },
+            { $lt: ["$createdAt", end] },
+          ],
+        },
+      };
+
       calls = await callsColl
         .aggregate([
-          { $match: monthMatch },
+          { $match: callsMatch },
           { $sort: { createdAt: -1 } },
+          // lookup payments per call
+          {
+            $lookup: {
+              from: "payments",
+              let: { callId: "$_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $eq: [{ $toString: "$callId" }, { $toString: "$$callId" }],
+                    },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 1,
+                    amount: 1,
+                    paidAt: 1,
+                    status: 1,
+                    txnId: 1,
+                  },
+                },
+              ],
+              as: "payments",
+            },
+          },
+          {
+            $addFields: {
+              paymentTotal: { $sum: { $map: { input: "$payments", as: "p", in: { $ifNull: ["$$p.amount", 0] } } } },
+              closedAt: { $ifNull: ["$closedAt", "$createdAt"] },
+              price: { $ifNull: ["$price", 0] },
+            },
+          },
           {
             $project: {
               _id: { $toString: "$_id" },
@@ -187,12 +419,16 @@ async function handler(req, res, user) {
               address: 1,
               type: 1,
               serviceType: 1,
-              price: { $ifNull: ["$price", 0] },
-              closedAt: "$createdAt",
+              price: 1,
+              status: 1,
+              payments: 1,
+              paymentTotal: 1,
+              paymentMismatch: { $ne: [{ $ifNull: ["$price", 0] }, { $ifNull: ["$paymentTotal", 0] }] },
+              closedAt: 1,
               createdAt: 1,
             },
           },
-          { $limit: 200 }, // enough for per-month
+          { $limit: 1000 },
         ])
         .toArray();
     }
@@ -215,7 +451,11 @@ async function handler(req, res, user) {
 export default requireRole("admin")(handler);
 
 /**
- * Recommended indexes (mongo shell):
- * db.forwarded_calls.createIndex({ status: 1, techId: 1, createdAt: -1 });
+ * Notes / recommended indexes:
+ * db.forwarded_calls.createIndex({ techId: 1, status: 1, createdAt: -1, closedAt: -1 });
+ * db.payments.createIndex({ callId: 1 });
  * db.technicians.createIndex({ name: 1 });
+ *
+ * Assumptions: payments collection has fields: callId (ObjectId or string), amount (number), paidAt (date), status.
+ * If your payments collection uses different field names, rename them inside the $lookup match/project.
  */
