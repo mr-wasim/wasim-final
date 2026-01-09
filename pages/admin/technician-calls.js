@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
 import Header from "../../components/Header";
 import toast from "react-hot-toast";
@@ -16,6 +16,12 @@ import {
   FiChevronDown,
   FiChevronUp,
 } from "react-icons/fi";
+
+// TechnicianCallsPage.jsx
+// Clean, responsive UI focused on accurate payment reconciliation.
+// - Keeps original header: Calls Closed (This Month), Calls Closed (Lifetime), Amount (This Month), Amount (Lifetime)
+// - Pending tab shows only count and who is pending (compact list) — no extra clutter
+// - Uses backend /api/admin/technician-calls which must implement accurate submittedAmount logic (matches payments API)
 
 function formatDateTime(value) {
   if (!value) return "—";
@@ -94,6 +100,7 @@ export default function TechnicianCallsPage() {
     const params = new URLSearchParams();
     if (month) params.set("month", month);
     if (selectedTech && selectedTech !== "all") params.set("techId", selectedTech);
+    // keep dateFrom/dateTo in params — backend supports them; UI keeps them but header preserved as original
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
     return params.toString();
@@ -191,6 +198,10 @@ export default function TechnicianCallsPage() {
         (c.address || "").toLowerCase().includes(query.toLowerCase())))
   );
 
+  const pendingClients = calls
+    .filter((c) => c.status === "Pending")
+    .map((c) => ({ id: c._id, name: c.clientName || c.customerName || c.phone || "Unnamed" }));
+
   return (
     <div className="min-h-screen bg-slate-50">
       <Header user={user} />
@@ -199,7 +210,7 @@ export default function TechnicianCallsPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3">
-            <motion.div whileHover={{ scale: 1.03 }} className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white grid place-items-center shadow-md">
+            <motion.div whileHover={{ scale: 1.03 }} className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center shadow-md">
               <FiPhoneCall className="text-xl" />
             </motion.div>
             <div>
@@ -221,7 +232,7 @@ export default function TechnicianCallsPage() {
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filters (kept as before) */}
         <section className="rounded-2xl bg-white border border-slate-200/70 shadow-sm p-3 sm:p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide">
             <FiFilter className="text-slate-500" /> Filters
@@ -267,7 +278,7 @@ export default function TechnicianCallsPage() {
           </div>
         </section>
 
-        {/* Summary */}
+        {/* Summary: restore original 4 cards exactly as before */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (This Month)" value={summary?.monthClosed ?? 0} accent="from-indigo-500 to-indigo-600" />
           <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (Lifetime)" value={summary?.totalClosed ?? 0} accent="from-blue-500 to-blue-600" />
@@ -286,7 +297,7 @@ export default function TechnicianCallsPage() {
 
               {loading && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {Array.from({ length: 3 }).map((_, i) => (
+                   {Array.from({ length: 3 }).map((_, i) => (
                     <div key={i} className="h-28 rounded-2xl bg-slate-100/70 animate-pulse" />
                   ))}
                 </div>
@@ -353,7 +364,7 @@ export default function TechnicianCallsPage() {
               <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    {["Closed", "Pending", "Cancelled"].map((st) => (
+                    {['Closed', 'Pending', 'Cancelled'].map((st) => (
                       <button key={st} onClick={() => setStatusTab(st)} className={`px-3 py-2 rounded-lg text-sm font-semibold ${statusTab === st ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-700"} transition`}>
                         {st} <span className="ml-2 inline-block text-xs bg-white/10 px-2 py-0.5 rounded-md">{counts[st] || 0}</span>
                       </button>
@@ -364,6 +375,19 @@ export default function TechnicianCallsPage() {
                 </div>
 
                 <div className="mb-3 text-sm text-slate-500">Showing <span className="font-semibold text-slate-700">{statusTab}</span> calls for selected period.</div>
+
+                {/* Pending compact section: only when Pending tab selected show names and count */}
+                {statusTab === 'Pending' && (
+                  <div className="mb-3 rounded-md border border-slate-100 bg-slate-50 p-3 text-sm">
+                    <div className="font-semibold text-slate-800">Pending calls: {pendingClients.length}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {pendingClients.slice(0, 30).map(p => (
+                        <div key={p.id} className="px-2 py-1 bg-white border rounded-md text-xs text-slate-700">{p.name}</div>
+                      ))}
+                      {pendingClients.length > 30 && <div className="px-2 py-1 text-xs text-slate-500">and {pendingClients.length - 30} more...</div>}
+                    </div>
+                  </div>
+                )}
 
                 {loading ? (
                   <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => (<div key={i} className="h-16 rounded-xl bg-slate-100/70 animate-pulse" />))}</div>
@@ -446,7 +470,7 @@ export default function TechnicianCallsPage() {
                                         <div key={pd._id} className="flex items-center justify-between bg-white rounded-md p-2 border border-slate-100">
                                           <div className="text-[13px]">
                                             <div className="font-medium">{new Date(pd.createdAt).toLocaleString()}</div>
-                                            <div className="text-xs text-slate-500">Mode: payment record</div>
+                                            <div className="text-xs text-slate-500">Mode: record</div>
                                           </div>
                                           <div className="text-sm text-slate-700">
                                             <div>Online: ₹{safeNum(pd.onlineAmount).toFixed(0)}</div>
