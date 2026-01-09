@@ -12,26 +12,25 @@ async function handler(req, res, user) {
     const db = await getDb();
     const callsColl = db.collection("forwarded_calls");
     const techsColl = db.collection("technicians");
-    const paymentsColl = db.collection("payments"); // assumed collection name
+    const paymentsColl = db.collection("payments"); // assumed
 
-    // query params
     let { month = "", techId = "", dateFrom = "", dateTo = "" } = req.query;
 
-    // build tech filter
+    // build tech candidates
     const techCandidates = [];
     if (techId && typeof techId === "string" && techId !== "all") {
       techCandidates.push(techId);
       if (ObjectId.isValid(techId)) techCandidates.push(new ObjectId(techId));
     }
 
-    // Resolve date window: prefer dateFrom/dateTo if provided, otherwise month
+    // date window
     let start, end;
     if (dateFrom && dateTo) {
-      // date inputs are in YYYY-MM-DD
       start = new Date(dateFrom + "T00:00:00.000Z");
       end = new Date(new Date(dateTo + "T00:00:00.000Z").getTime() + 24 * 3600 * 1000);
     } else if (typeof month === "string" && /^\d{4}-\d{2}$/.test(month)) {
       const [y, m] = month.split("-").map((n) => parseInt(n, 10));
+      // use UTC to avoid TZ surprises
       start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
       end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));
     } else {
@@ -40,32 +39,15 @@ async function handler(req, res, user) {
       end = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0));
     }
 
-    // Helper: tech filter object for mongo match
-    const techFilter =
-      techCandidates.length > 0 ? { techId: { $in: techCandidates } } : {};
+    const techFilter = techCandidates.length > 0 ? { techId: { $in: techCandidates } } : {};
 
-    // We'll treat "closeDate" as closedAt if present else createdAt
-    // --- Aggregation: per-tech month stats (closed calls, sums from payments) ---
+    // === month stats (Closed) with payments cast to double ===
     const monthMatch = {
       status: "Closed",
       $expr: {
         $and: [
-          {
-            $gte: [
-              {
-                $ifNull: ["$closedAt", "$createdAt"],
-              },
-              start,
-            ],
-          },
-          {
-            $lt: [
-              {
-                $ifNull: ["$closedAt", "$createdAt"],
-              },
-              end,
-            ],
-          },
+          { $gte: [{ $ifNull: ["$closedAt", "$createdAt"] }, start] },
+          { $lt: [{ $ifNull: ["$closedAt", "$createdAt"] }, end] },
         ],
       },
       ...techFilter,
@@ -74,7 +56,7 @@ async function handler(req, res, user) {
     const monthStatsArr = await callsColl
       .aggregate([
         { $match: monthMatch },
-        // lookup payments for each call, sum
+        // lookup payments and cast amounts to double
         {
           $lookup: {
             from: "payments",
@@ -90,7 +72,9 @@ async function handler(req, res, user) {
               {
                 $group: {
                   _id: null,
-                  paidSum: { $sum: { $ifNull: ["$amount", 0] } },
+                  paidSum: {
+                    $sum: { $toDouble: { $ifNull: ["$amount", 0] } },
+                  },
                 },
               },
             ],
@@ -99,7 +83,9 @@ async function handler(req, res, user) {
         },
         {
           $addFields: {
-            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+            paymentTotal: {
+              $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0],
+            },
           },
         },
         {
@@ -113,14 +99,14 @@ async function handler(req, res, user) {
       .toArray();
 
     const monthMap = new Map();
-    monthStatsArr.forEach((r) => {
-      monthMap.set(String(r._id), {
-        monthClosed: r.monthClosed || 0,
-        monthAmount: r.monthAmount || 0,
+    monthStatsArr.forEach((row) => {
+      monthMap.set(String(row._id), {
+        monthClosed: row.monthClosed || 0,
+        monthAmount: row.monthAmount || 0,
       });
     });
 
-    // ---- Aggregation: per-tech lifetime stats (closed) ----
+    // === lifetime stats (Closed) ===
     const lifetimeStatsArr = await callsColl
       .aggregate([
         { $match: { status: "Closed", ...techFilter } },
@@ -139,7 +125,9 @@ async function handler(req, res, user) {
               {
                 $group: {
                   _id: null,
-                  paidSum: { $sum: { $ifNull: ["$amount", 0] } },
+                  paidSum: {
+                    $sum: { $toDouble: { $ifNull: ["$amount", 0] } },
+                  },
                 },
               },
             ],
@@ -148,7 +136,9 @@ async function handler(req, res, user) {
         },
         {
           $addFields: {
-            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+            paymentTotal: {
+              $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0],
+            },
           },
         },
         {
@@ -162,15 +152,14 @@ async function handler(req, res, user) {
       .toArray();
 
     const lifetimeMap = new Map();
-    lifetimeStatsArr.forEach((r) => {
-      lifetimeMap.set(String(r._id), {
-        totalClosed: r.totalClosed || 0,
-        totalAmount: r.totalAmount || 0,
+    lifetimeStatsArr.forEach((row) => {
+      lifetimeMap.set(String(row._id), {
+        totalClosed: row.totalClosed || 0,
+        totalAmount: row.totalAmount || 0,
       });
     });
 
-    // ---- Per-tech pending/cancelled counts (month & lifetime) ----
-    // month pending/cancelled
+    // === pending counts (month/lifetime) using price cast to double ===
     const monthPendingArr = await callsColl
       .aggregate([
         {
@@ -178,12 +167,8 @@ async function handler(req, res, user) {
             status: "Pending",
             $expr: {
               $and: [
-                {
-                  $gte: [{ $ifNull: ["$createdAt", "$$NOW"] }, start],
-                },
-                {
-                  $lt: [{ $ifNull: ["$createdAt", "$$NOW"] }, end],
-                },
+                { $gte: [{ $ifNull: ["$createdAt", "$$NOW"] }, start] },
+                { $lt: [{ $ifNull: ["$createdAt", "$$NOW"] }, end] },
               ],
             },
             ...techFilter,
@@ -193,7 +178,7 @@ async function handler(req, res, user) {
           $group: {
             _id: "$techId",
             monthPending: { $sum: 1 },
-            monthPendingAmount: { $sum: { $ifNull: ["$price", 0] } },
+            monthPendingAmount: { $sum: { $toDouble: { $ifNull: ["$price", 0] } } },
           },
         },
       ])
@@ -219,7 +204,7 @@ async function handler(req, res, user) {
           $group: {
             _id: "$techId",
             totalPending: { $sum: 1 },
-            totalPendingAmount: { $sum: { $ifNull: ["$price", 0] } },
+            totalPendingAmount: { $sum: { $toDouble: { $ifNull: ["$price", 0] } } },
           },
         },
       ])
@@ -233,8 +218,7 @@ async function handler(req, res, user) {
       });
     });
 
-    // ---- Summary top-level (month + lifetime) ----
-    // month summary (closed)
+    // === top-level summary (month + lifetime) ===
     const monthSummaryArr = await callsColl
       .aggregate([
         { $match: monthMatch },
@@ -250,14 +234,16 @@ async function handler(req, res, user) {
                   },
                 },
               },
-              { $group: { _id: null, paidSum: { $sum: { $ifNull: ["$amount", 0] } } } },
+              { $group: { _id: null, paidSum: { $sum: { $toDouble: { $ifNull: ["$amount", 0] } } } } },
             ],
             as: "payment_sum",
           },
         },
         {
           $addFields: {
-            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+            paymentTotal: {
+              $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0],
+            },
           },
         },
         {
@@ -270,7 +256,6 @@ async function handler(req, res, user) {
       ])
       .toArray();
 
-    // lifetime summary (closed)
     const lifetimeSummaryArr = await callsColl
       .aggregate([
         { $match: { status: "Closed", ...techFilter } },
@@ -286,14 +271,16 @@ async function handler(req, res, user) {
                   },
                 },
               },
-              { $group: { _id: null, paidSum: { $sum: { $ifNull: ["$amount", 0] } } } },
+              { $group: { _id: null, paidSum: { $sum: { $toDouble: { $ifNull: ["$amount", 0] } } } } },
             ],
             as: "payment_sum",
           },
         },
         {
           $addFields: {
-            paymentTotal: { $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0] },
+            paymentTotal: {
+              $ifNull: [{ $arrayElemAt: ["$payment_sum.paidSum", 0] }, 0],
+            },
           },
         },
         {
@@ -313,7 +300,7 @@ async function handler(req, res, user) {
       totalAmount: lifetimeSummaryArr[0]?.totalAmount || 0,
     };
 
-    // ---- Technicians list (with avatar & per-tech stats merged) ----
+    // === technicians list with avatars and merged stats ===
     const techDocs = await techsColl
       .find(
         {},
@@ -359,17 +346,13 @@ async function handler(req, res, user) {
       };
     });
 
-    // ---- Calls list for selected tech + period (all statuses) ----
+    // === calls list for selected tech + period (all statuses) ===
     let calls = [];
     if (techCandidates.length) {
-      // match by tech and date window on createdAt (so pending/cancelled appear)
       const callsMatch = {
         techId: { $in: techCandidates },
         $expr: {
-          $and: [
-            { $gte: ["$createdAt", start] },
-            { $lt: ["$createdAt", end] },
-          ],
+          $and: [{ $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }],
         },
       };
 
@@ -377,7 +360,6 @@ async function handler(req, res, user) {
         .aggregate([
           { $match: callsMatch },
           { $sort: { createdAt: -1 } },
-          // lookup payments per call
           {
             $lookup: {
               from: "payments",
@@ -405,9 +387,17 @@ async function handler(req, res, user) {
           },
           {
             $addFields: {
-              paymentTotal: { $sum: { $map: { input: "$payments", as: "p", in: { $ifNull: ["$$p.amount", 0] } } } },
+              paymentTotal: {
+                $sum: {
+                  $map: {
+                    input: "$payments",
+                    as: "p",
+                    in: { $toDouble: { $ifNull: ["$$p.amount", 0] } },
+                  },
+                },
+              },
               closedAt: { $ifNull: ["$closedAt", "$createdAt"] },
-              price: { $ifNull: ["$price", 0] },
+              price: { $toDouble: { $ifNull: ["$price", 0] } },
             },
           },
           {
@@ -451,11 +441,10 @@ async function handler(req, res, user) {
 export default requireRole("admin")(handler);
 
 /**
- * Notes / recommended indexes:
+ * Recommended indexes:
  * db.forwarded_calls.createIndex({ techId: 1, status: 1, createdAt: -1, closedAt: -1 });
  * db.payments.createIndex({ callId: 1 });
  * db.technicians.createIndex({ name: 1 });
  *
- * Assumptions: payments collection has fields: callId (ObjectId or string), amount (number), paidAt (date), status.
- * If your payments collection uses different field names, rename them inside the $lookup match/project.
+ * NOTE: $toDouble requires MongoDB version that supports it (3.4+ / 4.x+ typically). If your server is older, tell me and I'll provide an alternate conversion.
  */
