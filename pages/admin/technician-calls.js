@@ -1,3 +1,4 @@
+// pages/admin/technician-calls.js
 "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
@@ -40,10 +41,6 @@ export default function TechnicianCallsPage() {
     return `${y}-${m}`;
   });
 
-  // optional custom date range
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-
   const [techOptions, setTechOptions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [calls, setCalls] = useState([]);
@@ -71,26 +68,27 @@ export default function TechnicianCallsPage() {
     })();
   }, [router]);
 
-  const buildParams = () => {
-    const params = new URLSearchParams();
-    if (month) params.set("month", month);
-    if (selectedTech && selectedTech !== "all") params.set("techId", selectedTech);
-    if (dateFrom) params.set("dateFrom", dateFrom);
-    if (dateTo) params.set("dateTo", dateTo);
-    return params.toString();
-  };
-
   const loadData = useCallback(
     async ({ showToast = false } = {}) => {
-      if (!user) return;
+      if (!user || !month) return;
       try {
         setRefreshing(true);
         if (loading) setLoading(true);
 
-        const qs = buildParams();
-        const res = await fetch(`/api/admin/technician-calls?${qs}`, {
-          cache: "no-store",
+        const params = new URLSearchParams({
+          month,
         });
+        if (selectedTech && selectedTech !== "all") {
+          params.set("techId", selectedTech);
+        }
+
+        const res = await fetch(
+          `/api/admin/technician-calls?${params.toString()}`,
+          {
+            cache: "no-store",
+          }
+        );
+
         const data = await res.json();
         if (!res.ok || !data?.success) {
           throw new Error(data?.error || "Failed to load technician stats");
@@ -109,7 +107,7 @@ export default function TechnicianCallsPage() {
         setRefreshing(false);
       }
     },
-    [user, month, selectedTech, dateFrom, dateTo, loading]
+    [user, month, selectedTech, loading]
   );
 
   useEffect(() => {
@@ -118,7 +116,6 @@ export default function TechnicianCallsPage() {
   }, [user, loadData]);
 
   const handleApply = () => {
-    // if custom range provided, clear month to avoid conflict OR we pass both (backend handles precedence)
     loadData({ showToast: true });
   };
 
@@ -148,7 +145,7 @@ export default function TechnicianCallsPage() {
                 Technician Calls
               </h1>
               <p className="text-xs sm:text-sm text-slate-500">
-                Track closed calls and earnings per technician by month and lifetime. Payments are sourced from payments collection for exact matching.
+                Track submitted payments and match with call prices.
               </p>
             </div>
           </div>
@@ -179,7 +176,7 @@ export default function TechnicianCallsPage() {
             Filters
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* Technician select */}
             <div>
               <label className="block text-[11px] font-semibold text-slate-500 mb-1">
@@ -223,34 +220,8 @@ export default function TechnicianCallsPage() {
               </div>
             </div>
 
-            {/* Date from */}
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                From (optional)
-              </label>
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50/60 outline-none"
-              />
-            </div>
-
-            {/* Date to */}
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                To (optional)
-              </label>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50/60 outline-none"
-              />
-            </div>
-
-            {/* Apply button (full width row) */}
-            <div className="col-span-1 sm:col-span-4 flex items-end justify-start sm:justify-end">
+            {/* Apply button */}
+            <div className="flex items-end justify-start sm:justify-end">
               <button
                 onClick={handleApply}
                 className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition w-full sm:w-auto"
@@ -278,13 +249,13 @@ export default function TechnicianCallsPage() {
           <SummaryCard
             icon={<FiDollarSign />}
             label="Amount (This Month)"
-            value={`₹${(summary?.monthAmount ?? 0).toFixed(0)}`}
+            value={`₹${summary?.monthAmount ?? 0}`}
             accent="from-emerald-500 to-emerald-600"
           />
           <SummaryCard
             icon={<FiDollarSign />}
-            label="Amount (Lifetime)"
-            value={`₹${(summary?.totalAmount ?? 0).toFixed(0)}`}
+            label="Submitted (This Month)"
+            value={`₹${summary?.monthSubmitted ?? 0}`}
             accent="from-violet-500 to-violet-600"
           />
         </section>
@@ -331,20 +302,12 @@ export default function TechnicianCallsPage() {
                       className="text-left rounded-2xl border border-slate-200 bg-slate-50/60 hover:bg-slate-100/80 p-3 sm:p-4 transition shadow-sm"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-2xl overflow-hidden bg-indigo-600 text-white grid place-items-center text-sm font-bold">
-                          {t.avatar ? (
-                            <img
-                              src={t.avatar}
-                              alt={t.name}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            (t.name || "?")
-                              .toString()
-                              .trim()
-                              .charAt(0)
-                              .toUpperCase()
-                          )}
+                        <div className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
+                          {(t.name || "?")
+                            .toString()
+                            .trim()
+                            .charAt(0)
+                            .toUpperCase()}
                         </div>
                         <div className="min-w-0">
                           <div className="font-semibold text-sm text-slate-900 truncate">
@@ -379,15 +342,15 @@ export default function TechnicianCallsPage() {
                             Month amount
                           </div>
                           <div className="font-semibold text-emerald-700">
-                            ₹{(t.monthAmount ?? 0).toFixed(0)}
+                            ₹{t.monthAmount ?? 0}
                           </div>
                         </div>
                         <div>
                           <div className="uppercase text-[10px] text-slate-400">
-                            Lifetime amount
+                            Submitted (Month)
                           </div>
                           <div className="font-semibold text-emerald-700">
-                            ₹{(t.totalAmount ?? 0).toFixed(0)}
+                            ₹{t.monthEmbeddedPaid ?? 0}
                           </div>
                         </div>
                       </div>
@@ -403,20 +366,12 @@ export default function TechnicianCallsPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <div className="h-9 w-9 rounded-2xl overflow-hidden bg-indigo-600 text-white grid place-items-center text-sm font-bold">
-                    {activeTech?.avatar ? (
-                      <img
-                        src={activeTech.avatar}
-                        alt={activeTech.name}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      (activeTech?.name || "?")
-                        .toString()
-                        .trim()
-                        .charAt(0)
-                        .toUpperCase()
-                    )}
+                  <div className="h-9 w-9 rounded-2xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
+                    {(activeTech?.name || "?")
+                      .toString()
+                      .trim()
+                      .charAt(0)
+                      .toUpperCase()}
                   </div>
                   <div>
                     <div className="font-semibold text-slate-900 text-sm sm:text-base">
@@ -435,107 +390,147 @@ export default function TechnicianCallsPage() {
                 </button>
               </div>
 
-              {/* Calls grouped by status */}
-              <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-                  <StatusPanel
-                    title="Pending"
-                    count={calls.filter((c) => c.status === "Pending").length}
-                    amount={calls
-                      .filter((c) => c.status === "Pending")
-                      .reduce((s, c) => s + (c.price || 0), 0)}
-                  />
-                  <StatusPanel
-                    title="Closed"
-                    count={calls.filter((c) => c.status === "Closed").length}
-                    amount={calls
-                      .filter((c) => c.status === "Closed")
-                      .reduce((s, c) => s + (c.paymentTotal || 0), 0)}
-                  />
-                  <StatusPanel
-                    title="Cancelled"
-                    count={calls.filter((c) => c.status === "Cancelled").length}
-                    amount={calls
-                      .filter((c) => c.status === "Cancelled")
-                      .reduce((s, c) => s + (c.price || 0), 0)}
-                  />
+              {/* Calls table */}
+              <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm overflow-hidden">
+                <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.3fr] gap-3 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-200">
+                  <span>Customer</span>
+                  <span>Phone</span>
+                  <span>Address</span>
+                  <span>Price</span>
+                  <span>Submitted</span>
+                  <span>Closed Date</span>
                 </div>
 
-                {/* Lists */}
-                <div className="space-y-4">
-                  {["Closed", "Pending", "Cancelled"].map((st) => {
-                    const list = calls.filter((c) => c.status === st);
-                    return (
-                      <div key={st}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="font-semibold text-sm text-slate-800">
-                            {st} ({list.length})
-                          </div>
-                          <div className="text-[12px] text-slate-500">
-                            {st === "Closed"
-                              ? `Total collected ₹${list
-                                  .reduce((s, c) => s + (c.paymentTotal || 0), 0)
-                                  .toFixed(0)}`
-                              : `Total ₹${list
-                                  .reduce((s, c) => s + (c.price || 0), 0)
-                                  .toFixed(0)}`}
-                          </div>
-                        </div>
+                {loading && (
+                  <div className="p-4 space-y-3">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="h-16 rounded-xl bg-slate-100/70 animate-pulse"
+                      />
+                    ))}
+                  </div>
+                )}
 
-                        {list.length === 0 ? (
-                          <div className="p-3 text-sm text-slate-500">No calls</div>
-                        ) : (
-                          <div className="divide-y divide-slate-100">
-                            {list.map((c) => (
-                              <div
-                                key={c._id}
-                                className="px-3 py-2 flex items-start gap-3"
-                              >
-                                <div className="h-10 w-10 rounded-md bg-indigo-600 text-white grid place-items-center font-semibold">
-                                  {(c.clientName || c.customerName || "?")
-                                    .toString()
-                                    .trim()
-                                    .charAt(0)
-                                    .toUpperCase()}
+                {!loading && calls.length === 0 && (
+                  <div className="p-6 text-center text-sm text-slate-500">
+                    No calls found for this technician and month.
+                  </div>
+                )}
+
+                {!loading && calls.length > 0 && (
+                  <div className="divide-y divide-slate-100">
+                    {calls.map((c) => {
+                      const matched = Number(c.price || 0) === Number(c.submittedAmount || 0);
+                      return (
+                        <div
+                          key={c._id}
+                          className="px-3 sm:px-4 py-3 sm:py-3.5 hover:bg-slate-50/60 transition"
+                        >
+                          {/* desktop */}
+                          <div className="hidden md:grid grid-cols-[1.4fr,1fr,2fr,1fr,1fr,1.3fr] gap-3 items-start text-sm text-slate-800">
+                            {/* customer */}
+                            <div className="flex items-start gap-2">
+                              <div className="h-9 w-9 rounded-xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
+                                {(c.clientName || c.customerName || "?")
+                                  .toString()
+                                  .trim()
+                                  .charAt(0)
+                                  .toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="font-semibold">
+                                  {c.clientName || c.customerName || "—"}
                                 </div>
-                                <div className="min-w-0">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="font-semibold text-sm text-slate-900">
-                                      {c.clientName || c.customerName || "—"}
-                                    </div>
-                                    <div className="text-[11px] text-slate-500">
-                                      {formatDateTime(c.closedAt || c.createdAt)}
-                                    </div>
-                                  </div>
-                                  <div className="text-[13px] text-slate-700">
-                                    {c.phone || "—"} • {c.address || "—"}
-                                  </div>
-                                  <div className="text-[12px] text-slate-600 mt-1 flex items-center gap-3">
-                                    <span>Price: ₹{(c.price || 0).toFixed(0)}</span>
-                                    {st === "Closed" && (
-                                      <span>
-                                        Collected: ₹{(c.paymentTotal || 0).toFixed(0)}
-                                        {c.paymentMismatch ? (
-                                          <span className="ml-2 text-xs text-rose-600">
-                                            (mismatch)
-                                          </span>
-                                        ) : (
-                                          <span className="ml-2 text-xs text-emerald-700">
-                                            (matched)
-                                          </span>
-                                        )}
-                                      </span>
-                                    )}
-                                  </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {c.type || c.serviceType || "—"}
                                 </div>
                               </div>
-                            ))}
+                            </div>
+
+                            {/* phone */}
+                            <div className="text-sm text-slate-800">
+                              {c.phone || "—"}
+                            </div>
+
+                            {/* address */}
+                            <div className="text-xs sm:text-sm text-slate-700 line-clamp-2">
+                              {c.address || "—"}
+                            </div>
+
+                            {/* price */}
+                            <div className="font-semibold text-emerald-700 text-sm">
+                              ₹{c.price ?? 0}
+                            </div>
+
+                            {/* submitted */}
+                            <div className="text-sm">
+                              <div className={`font-semibold ${matched ? "text-emerald-700" : "text-rose-600"}`}>
+                                ₹{c.submittedAmount ?? 0}
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {c.paymentStatus || "—"}{" "}
+                                <span className="ml-2 text-[11px] font-semibold" style={{ color: matched ? "#059669" : "#dc2626" }}>
+                                  ({matched ? "matched" : "mismatch"})
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* date */}
+                            <div className="flex flex-col text-xs sm:text-sm text-slate-700 gap-0.5">
+                              <div className="flex items-center gap-1">
+                                <FiClock className="text-slate-400" />
+                                <span>{formatDateTime(c.closedDate || c.closedAt || c.createdAt)}</span>
+                              </div>
+                              {c.lastPaymentAt && (
+                                <div className="text-[11px] text-slate-500">
+                                  Last Submit: {formatDateTime(c.lastPaymentAt)}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+
+                          {/* mobile */}
+                          <div className="md:hidden space-y-1.5 text-sm text-slate-800">
+                            <div className="flex items-center gap-2">
+                              <div className="h-9 w-9 rounded-xl bg-indigo-600 text-white grid place-items-center text-sm font-bold">
+                                {(c.clientName || c.customerName || "?")
+                                  .toString()
+                                  .trim()
+                                  .charAt(0)
+                                  .toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="font-semibold">
+                                  {c.clientName || c.customerName || "—"}
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {c.phone || "—"}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="text-[11px] text-slate-500">
+                              {c.type || c.serviceType || "—"} • ₹{c.price ?? 0}
+                            </div>
+
+                            <div className="text-[11px] text-slate-500">
+                              Submitted: ₹{c.submittedAmount ?? 0} • {c.paymentStatus || "—"} • <span style={{ color: matched ? "#059669" : "#dc2626" }}>({matched ? "matched" : "mismatch"})</span>
+                            </div>
+
+                            <div className="text-[11px] text-slate-500">
+                              {formatDateTime(c.closedDate || c.closedAt || c.createdAt)}
+                            </div>
+
+                            <div className="text-[11px] text-slate-500 line-clamp-2">
+                              {c.address || "—"}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -565,17 +560,5 @@ function SummaryCard({ icon, label, value, accent }) {
         </div>
       </div>
     </motion.div>
-  );
-}
-
-function StatusPanel({ title, count, amount }) {
-  return (
-    <div className="rounded-xl border border-slate-100 p-3">
-      <div className="text-[11px] text-slate-500 uppercase">{title}</div>
-      <div className="flex items-baseline gap-3">
-        <div className="font-semibold text-lg">{count}</div>
-        <div className="text-[13px] text-slate-600">₹{(amount || 0).toFixed(0)}</div>
-      </div>
-    </div>
   );
 }
