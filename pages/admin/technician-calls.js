@@ -1,4 +1,4 @@
-// "use client";
+"use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
 import Header from "../../components/Header";
@@ -124,10 +124,11 @@ export default function TechnicianCallsPage() {
       }));
 
       setTechOptions(technicians);
+      // NOTE: summary.monthAmount now comes from server as "sum of closed calls' prices" (consistent with technicians list)
       setSummary({
         monthClosed: Number(data.summary?.monthClosed || 0),
         monthAmount: safeNum(data.summary?.monthAmount || 0),
-        monthSubmitted: safeNum(data.summary?.monthSubmitted || 0),
+        monthSubmitted: safeNum(data.summary?.monthSubmitted || 0), // payments submitted (kept for reference)
         totalClosed: Number(data.summary?.totalClosed || 0),
         totalAmount: safeNum(data.summary?.totalAmount || 0),
       });
@@ -151,7 +152,7 @@ export default function TechnicianCallsPage() {
   const activeTech = useMemo(() => (selectedTech === "all" ? null : techOptions.find(t => t._id === selectedTech) || null), [selectedTech, techOptions]);
   const isAllMode = !activeTech;
 
-  // payments map by tech for quick sums (payments are flattened per-call entries)
+  // payments map by tech for quick sums (still available for payment-specific UI)
   const paymentsByTech = useMemo(() => {
     const m = new Map();
     payments.forEach(p => {
@@ -169,26 +170,26 @@ export default function TechnicianCallsPage() {
     Cancelled: calls.filter(c => c.status === "Cancelled").length,
   };
 
-  // amount displayed in the panel header "Total: ₹" — context-aware to avoid mismatch
+  // IMPORTANT CHANGE:
+  // Use the same canonical source for "Closed" totals:
+  //  - if a specific technician is selected: use that technician's monthAmount
+  //  - if all: use summary.monthAmount (server returns sum of all technicians' monthAmount)
   const totalPanelAmount = useMemo(() => {
-    if (selectedTech !== "all") {
-      // if viewing specific technician and Closed tab -> show payments collected for that tech in the selected payments-range
-      if (statusTab === "Closed") {
-        return paymentsByTech.get(selectedTech) || 0;
+    if (statusTab === "Closed") {
+      if (!isAllMode) {
+        return safeNum(activeTech?.monthAmount || 0);
       } else {
-        // for Pending/Cancelled show sum of call.price for those calls (keeps previous meaning)
-        return calls.filter(c => c.techId === selectedTech && c.status === statusTab).reduce((s, c) => s + safeNum(c.price), 0);
+        return safeNum(summary?.monthAmount || 0);
       }
     } else {
-      // no tech selected: for Closed show overall payments submitted in range (summary.monthSubmitted)
-      if (statusTab === "Closed") {
-        return safeNum(summary?.monthSubmitted || 0);
+      // Pending/Cancelled: keep showing sum of calls' price in the filtered calls list (consistent with calls data)
+      if (!isAllMode) {
+        return calls.filter(c => c.techId === selectedTech && c.status === statusTab).reduce((s, c) => s + safeNum(c.price), 0);
       } else {
-        // for Pending/Cancelled across all techs show sum of call.price in calls filtered by status
         return calls.filter(c => c.status === statusTab).reduce((s, c) => s + safeNum(c.price), 0);
       }
     }
-  }, [selectedTech, statusTab, paymentsByTech, calls, summary]);
+  }, [statusTab, isAllMode, activeTech, summary, calls, selectedTech]);
 
   const filteredList = calls.filter(
     (c) =>
@@ -200,7 +201,7 @@ export default function TechnicianCallsPage() {
 
   const pendingClients = calls.filter((c) => c.status === "Pending").map((c) => ({ id: c._id, name: c.clientName || c.customerName || c.phone || "Unnamed" }));
 
-  // --- NEW: header values computed to respect selectedTech / date-range ---
+  // header values (consistent: show technician's aggregated values or global summary)
   const headerValues = useMemo(() => {
     if (isAllMode) {
       return {

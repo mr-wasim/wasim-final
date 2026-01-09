@@ -46,7 +46,7 @@ async function handler(req, res, user) {
       if (maybeObj && typeof maybeObj !== "string") techCandidates.push(maybeObj);
     }
 
-    // month stats (calls closed in start..end)
+    // month stats (calls closed in start..end) grouped by techId
     const monthStatsArr = await callsColl.aggregate([
       { $addFields: { closedDate: { $ifNull: ["$closedAt", "$createdAt"] }, priceNum: { $ifNull: ["$price", 0] }, embeddedPayments: { $ifNull: ["$payments", []] } } },
       { $match: { status: "Closed", closedDate: { $gte: start, $lt: end }, ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
@@ -56,7 +56,7 @@ async function handler(req, res, user) {
     const monthMap = new Map();
     monthStatsArr.forEach(r => monthMap.set(String(r._id), { monthClosed: r.monthClosed || 0, monthAmount: r.monthAmount || 0, monthEmbeddedPaid: r.monthEmbeddedPaid || 0 }));
 
-    // lifetime stats (respect tech filter if present)
+    // lifetime stats
     const lifetimeStatsArr = await callsColl.aggregate([
       { $addFields: { priceNum: { $ifNull: ["$price", 0] }, embeddedPayments: { $ifNull: ["$payments", []] } } },
       { $match: { status: "Closed", ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
@@ -66,7 +66,7 @@ async function handler(req, res, user) {
     const lifetimeMap = new Map();
     lifetimeStatsArr.forEach(r => lifetimeMap.set(String(r._id), { totalClosed: r.totalClosed || 0, totalAmount: r.totalAmount || 0, totalEmbeddedPaid: r.totalEmbeddedPaid || 0 }));
 
-    // payments totals for the payment range (this matches payment.js)
+    // payments totals for the payment range (keeps for reference)
     const paymentsMatch = { createdAt: { $gte: start, $lt: end }, ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) };
 
     const paymentsMonthAgg = await paymentsColl.aggregate([
@@ -76,7 +76,7 @@ async function handler(req, res, user) {
 
     const monthPaymentsTotal = paymentsMonthAgg[0] || { online: 0, cash: 0, total: 0 };
 
-    // monthSummary by status (calls) --> NOW respects tech filter and uses a match stage
+    // monthSummary by status (calls) --> respects tech filter
     const monthSummaryArr = await callsColl.aggregate([
       { $addFields: { closedDate: { $ifNull: ["$closedAt", "$createdAt"] }, priceNum: { $ifNull: ["$price", 0] } } },
       { $match: { closedDate: { $gte: start, $lt: end }, ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
@@ -93,7 +93,7 @@ async function handler(req, res, user) {
       { $group: { _id: null, totalClosed: { $sum: 1 }, totalAmount: { $sum: "$priceNum" } } }
     ]).toArray();
 
-    // technicians list (always full list so user can select)
+    // technicians list (always full list)
     const techDocs = await techsColl.find({}, { projection: { _id: 1, name: 1, fullName: 1, techName: 1, username: 1, phone: 1, avatar: 1, profilePic: 1, bio: 1 } }).sort({ name: 1 }).toArray();
 
     const technicians = techDocs.map(t => {
@@ -117,7 +117,7 @@ async function handler(req, res, user) {
       };
     });
 
-    // calls list (calls closed within start..end) - only loaded when techCandidates provided (keeps previous behavior)
+    // calls list (calls closed within start..end) - only loaded when techCandidates provided
     let calls = [];
     if (techCandidates.length) {
       const callsPipeline = [
@@ -247,11 +247,12 @@ async function handler(req, res, user) {
 
     const paymentsList = await paymentsColl.aggregate(paymentsFlattenPipeline).toArray();
 
+    // IMPORTANT: compute summary.monthAmount from monthSummaryByStatus Closed amount (canonical)
     const lifetimeSummary = lifetimeSummaryArr[0] || {};
     const summary = {
       monthClosed: monthSummaryByStatus["Closed"]?.count || 0,
-      monthAmount: monthSummaryByStatus["Closed"]?.amount || 0,
-      monthSubmitted: monthPaymentsTotal.total || 0,
+      monthAmount: monthSummaryByStatus["Closed"]?.amount || 0, // <-- canonical: sum of closed call prices in period
+      monthSubmitted: monthPaymentsTotal.total || 0, // payments submitted (kept separately)
       monthPending: monthSummaryByStatus["Pending"]?.count || 0,
       monthPendingAmount: monthSummaryByStatus["Pending"]?.amount || 0,
       totalClosed: lifetimeSummary.totalClosed || 0,
