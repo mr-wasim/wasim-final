@@ -1,4 +1,4 @@
-"use client";
+// "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
 import Header from "../../components/Header";
@@ -195,10 +195,29 @@ export default function TechnicianCallsPage() {
       c.status === statusTab &&
       (((c.clientName || c.customerName || "").toLowerCase().includes(query.toLowerCase()) ||
         (c.phone || "").includes(query) ||
-        (c.address || "").toLowerCase().includes(query.toLowerCase())))
+        (c.address || "").toLowerCase().includes(query.toLowerCase())) || query.trim() === "")
   );
 
   const pendingClients = calls.filter((c) => c.status === "Pending").map((c) => ({ id: c._id, name: c.clientName || c.customerName || c.phone || "Unnamed" }));
+
+  // --- NEW: header values computed to respect selectedTech / date-range ---
+  const headerValues = useMemo(() => {
+    if (isAllMode) {
+      return {
+        monthClosed: summary?.monthClosed ?? 0,
+        totalClosed: summary?.totalClosed ?? 0,
+        monthAmount: safeNum(summary?.monthAmount ?? 0),
+        totalAmount: safeNum(summary?.totalAmount ?? 0)
+      };
+    } else {
+      return {
+        monthClosed: activeTech?.monthClosed ?? 0,
+        totalClosed: activeTech?.totalClosed ?? 0,
+        monthAmount: safeNum(activeTech?.monthAmount ?? 0),
+        totalAmount: safeNum(activeTech?.totalAmount ?? 0)
+      };
+    }
+  }, [isAllMode, activeTech, summary]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -207,20 +226,20 @@ export default function TechnicianCallsPage() {
       <main className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <motion.div whileHover={{ scale: 1.03 }} className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center shadow-md">
+          <div className="flex items-center gap-3 min-w-0">
+            <motion.div whileHover={{ scale: 1.03 }} className="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center shadow-md flex-shrink-0">
               <FiPhoneCall className="text-xl" />
             </motion.div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Technician Calls</h1>
-              <p className="text-xs sm:text-sm text-slate-500">
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 truncate">Technician Calls</h1>
+              <p className="text-xs sm:text-sm text-slate-500 truncate">
                 Calls counted by close-month; payments counted by submission-month. Reconciled amounts shown.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="search customer / phone / address" className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white outline-none" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="search customer / phone / address" className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white outline-none min-w-[150px]" />
             <button onClick={() => loadData({ showToast: true })} disabled={refreshing} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 active:scale-95 transition">
               <motion.span animate={refreshing ? { rotate: 360 } : { rotate: 0 }} transition={{ repeat: refreshing ? Infinity : 0, duration: 0.8, ease: "linear" }}>
                 <FiRefreshCw />
@@ -230,7 +249,7 @@ export default function TechnicianCallsPage() {
           </div>
         </div>
 
-        {/* Filters (same as before) */}
+        {/* Filters */}
         <section className="rounded-2xl bg-white border border-slate-200/70 shadow-sm p-3 sm:p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide">
             <FiFilter className="text-slate-500" /> Filters
@@ -276,44 +295,13 @@ export default function TechnicianCallsPage() {
           </div>
         </section>
 
-        {/* Summary (original 4 cards) */}
+        {/* Summary (uses headerValues now) */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (This Month)" value={summary?.monthClosed ?? 0} accent="from-indigo-500 to-indigo-600" />
-          <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (Lifetime)" value={summary?.totalClosed ?? 0} accent="from-blue-500 to-blue-600" />
-          <SummaryCard icon={<FiDollarSign />} label="Amount (This Month)" value={`₹${safeNum(summary?.monthAmount).toFixed(0)}`} accent="from-emerald-500 to-emerald-600" />
-          <SummaryCard icon={<FiDollarSign />} label="Amount (Lifetime)" value={`₹${safeNum(summary?.totalAmount).toFixed(0)}`} accent="from-violet-500 to-violet-600" />
+          <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (This Month)" value={headerValues.monthClosed ?? 0} accent="from-indigo-500 to-indigo-600" />
+          <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (Lifetime)" value={headerValues.totalClosed ?? 0} accent="from-blue-500 to-blue-600" />
+          <SummaryCard icon={<FiDollarSign />} label="Amount (This Month)" value={`₹${safeNum(headerValues.monthAmount).toFixed(0)}`} accent="from-emerald-500 to-emerald-600" />
+          <SummaryCard icon={<FiDollarSign />} label="Amount (Lifetime)" value={`₹${safeNum(headerValues.totalAmount).toFixed(0)}`} accent="from-violet-500 to-violet-600" />
         </section>
-
-        {/* Payments submitted (This Month) — this will match payment.js totals */}
-        {/* <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold text-slate-800">Payments submitted (This Month)</div>
-            <div className="text-sm text-slate-500 font-medium">Total: ₹{safeNum(summary?.monthSubmitted).toFixed(0)}</div>
-          </div>
-
-          {loading ? (
-            <div className="grid gap-2"><div className="h-10 bg-slate-100 animate-pulse rounded" /><div className="h-10 bg-slate-100 animate-pulse rounded" /></div>
-          ) : payments.length === 0 ? (
-            <div className="text-sm text-slate-500">No payments submitted in this period.</div>
-          ) : (
-            <div className="grid gap-2">
-              {payments.map(p => (
-                <div key={`${p.paymentId}-${p.callId}`} className="flex items-center justify-between bg-slate-50 p-3 rounded border border-slate-100">
-                  <div>
-                    <div className="font-medium">{p.clientName || "Unknown"}</div>
-                    <div className="text-xs text-slate-500">{p.phone || "—"} • Call price: ₹{safeNum(p.callPrice).toFixed(0)}</div>
-                    <div className="text-xs text-slate-500">Call closed: {p.callClosedAt ? formatDateTime(p.callClosedAt) : "—"}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-semibold">₹{safeNum(p.totalAmount).toFixed(0)}</div>
-                    <div className="text-xs text-slate-500">{formatDateTime(p.paymentCreatedAt)}</div>
-                    <div className="mt-1 inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-md bg-emerald-100 text-emerald-700">Submitted</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section> */}
 
         {/* Technicians + Detail */}
         <section className="space-y-4">
@@ -336,7 +324,7 @@ export default function TechnicianCallsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {techOptions.map((t) => (
                     <motion.button key={t._id} whileTap={{ scale: 0.97 }} onClick={() => setSelectedTech(t._id)} className="text-left rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 transition shadow-sm hover:shadow-md">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
                         <div className="h-12 w-12 rounded-xl overflow-hidden bg-slate-200 flex-shrink-0">
                           {t.avatar ? <img src={t.avatar} alt={t.name} className="h-full w-full object-cover" /> : <div className="h-full w-full grid place-items-center text-lg font-bold text-slate-700">{(t.name || "?").toString().trim().charAt(0).toUpperCase()}</div>}
                         </div>
@@ -378,8 +366,8 @@ export default function TechnicianCallsPage() {
                   <div className="h-12 w-12 rounded-xl overflow-hidden bg-slate-200 flex-shrink-0">
                     {activeTech?.avatar ? <img src={activeTech.avatar} alt={activeTech.name} className="h-full w-full object-cover" /> : <div className="h-full w-full grid place-items-center text-lg font-bold text-slate-700">{(activeTech?.name || "?").toString().trim().charAt(0).toUpperCase()}</div>}
                   </div>
-                  <div>
-                    <div className="font-semibold text-slate-900 text-sm sm:text-base">{activeTech?.name}</div>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-900 text-sm sm:text-base truncate">{activeTech?.name}</div>
                     <div className="text-[12px] text-slate-500">Selected technician overview</div>
                   </div>
                 </div>
@@ -428,18 +416,18 @@ export default function TechnicianCallsPage() {
 
                       return (
                         <motion.div key={c._id} whileHover={{ backgroundColor: "#f8fafc" }} className="px-3 py-3 flex flex-col gap-3">
-                          <div className="flex items-start gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
                             <div className="h-12 w-12 rounded-md overflow-hidden bg-indigo-600 text-white grid place-items-center font-semibold text-lg flex-shrink-0">
                               {avatar ? <img src={avatar} alt={clientName} className="h-full w-full object-cover" /> : (clientName[0] || "?").toString().toUpperCase()}
                             </div>
 
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <div className="font-semibold text-sm text-slate-900">{clientName}</div>
-                                  <div className="text-[13px] text-slate-700">{c.phone || "—"} • {c.address || "—"}</div>
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-sm text-slate-900 truncate">{clientName}</div>
+                                  <div className="text-[13px] text-slate-700 truncate">{c.phone || "—"} • {c.address || "—"}</div>
                                 </div>
-                                <div className="text-[12px] text-slate-500">{formatDateTime(c.closedAt || c.createdAt)}</div>
+                                <div className="text-[12px] text-slate-500 whitespace-nowrap">{formatDateTime(c.closedAt || c.createdAt)}</div>
                               </div>
 
                               <div className="text-[12px] text-slate-600 mt-2 flex items-center justify-between gap-4">
@@ -453,7 +441,7 @@ export default function TechnicianCallsPage() {
                                   </div>
                                 </div>
 
-                                <div className="text-right text-xs text-slate-500">
+                                <div className="text-right text-xs text-slate-500 whitespace-nowrap">
                                   <div>Last payment: {c.lastPaymentAt ? formatDateTime(c.lastPaymentAt) : "—"}</div>
                                   <div>Call closed at: {c.closedAt ? formatDateTime(c.closedAt) : "—"}</div>
                                 </div>

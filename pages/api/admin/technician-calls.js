@@ -56,7 +56,7 @@ async function handler(req, res, user) {
     const monthMap = new Map();
     monthStatsArr.forEach(r => monthMap.set(String(r._id), { monthClosed: r.monthClosed || 0, monthAmount: r.monthAmount || 0, monthEmbeddedPaid: r.monthEmbeddedPaid || 0 }));
 
-    // lifetime stats
+    // lifetime stats (respect tech filter if present)
     const lifetimeStatsArr = await callsColl.aggregate([
       { $addFields: { priceNum: { $ifNull: ["$price", 0] }, embeddedPayments: { $ifNull: ["$payments", []] } } },
       { $match: { status: "Closed", ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
@@ -76,23 +76,24 @@ async function handler(req, res, user) {
 
     const monthPaymentsTotal = paymentsMonthAgg[0] || { online: 0, cash: 0, total: 0 };
 
-    // monthSummary by status (calls)
+    // monthSummary by status (calls) --> NOW respects tech filter and uses a match stage
     const monthSummaryArr = await callsColl.aggregate([
       { $addFields: { closedDate: { $ifNull: ["$closedAt", "$createdAt"] }, priceNum: { $ifNull: ["$price", 0] } } },
-      { $group: { _id: "$status", countInMonth: { $sum: { $cond: [{ $and: [{ $gte: ["$closedDate", start] }, { $lt: ["$closedDate", end] }] }, 1, 0] } }, amountInMonth: { $sum: { $cond: [{ $and: [{ $gte: ["$closedDate", start] }, { $lt: ["$closedDate", end] }] }, "$priceNum", 0] } } } }
+      { $match: { closedDate: { $gte: start, $lt: end }, ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
+      { $group: { _id: "$status", countInMonth: { $sum: 1 }, amountInMonth: { $sum: "$priceNum" } } }
     ]).toArray();
 
     const monthSummaryByStatus = {};
     monthSummaryArr.forEach(r => { monthSummaryByStatus[r._id || "UNKNOWN"] = { count: r.countInMonth || 0, amount: r.amountInMonth || 0 } });
 
-    // lifetime summary
+    // lifetime summary (respects tech filter)
     const lifetimeSummaryArr = await callsColl.aggregate([
       { $addFields: { priceNum: { $ifNull: ["$price", 0] } } },
-      { $match: { status: "Closed" } },
+      { $match: { status: "Closed", ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}) } },
       { $group: { _id: null, totalClosed: { $sum: 1 }, totalAmount: { $sum: "$priceNum" } } }
     ]).toArray();
 
-    // technicians list
+    // technicians list (always full list so user can select)
     const techDocs = await techsColl.find({}, { projection: { _id: 1, name: 1, fullName: 1, techName: 1, username: 1, phone: 1, avatar: 1, profilePic: 1, bio: 1 } }).sort({ name: 1 }).toArray();
 
     const technicians = techDocs.map(t => {
@@ -116,7 +117,7 @@ async function handler(req, res, user) {
       };
     });
 
-    // calls list (calls closed within start..end)
+    // calls list (calls closed within start..end) - only loaded when techCandidates provided (keeps previous behavior)
     let calls = [];
     if (techCandidates.length) {
       const callsPipeline = [
