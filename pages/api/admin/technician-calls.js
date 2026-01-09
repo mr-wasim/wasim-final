@@ -342,7 +342,7 @@ async function handler(req, res, user) {
                 in: { $add: ["$$value", { $ifNull: ["$$this.amount", 0] }] },
               },
             },
-            // sum amounts from paymentDocs.calls that match this callId
+            // sum amounts from paymentDocs.calls that match this callId (approximation: add payment doc totals where it contains this call)
             paidFromPaymentsCollection: {
               $reduce: {
                 input: {
@@ -350,19 +350,21 @@ async function handler(req, res, user) {
                     input: "$paymentDocs",
                     as: "pd",
                     in: {
-                      $reduce: {
-                        input: {
-                          $filter: {
-                            input: { $ifNull: ["$$pd.calls", []] },
-                            as: "pc",
-                            cond: { $eq: [{ $toString: "$$pc.callId" }, "$callIdStr"] },
+                      $let: {
+                        vars: {
+                          matches: {
+                            $filter: {
+                              input: { $ifNull: ["$$pd.calls", []] },
+                              as: "pc",
+                              cond: { $eq: [{ $toString: "$$pc.callId" }, "$callIdStr"] },
+                            },
                           },
                         },
-                        initialValue: 0,
                         in: {
-                          $add: [
-                            "$$value",
-                            { $add: [{ $ifNull: ["$$this.onlineAmount", 0] }, { $ifNull: ["$$this.cashAmount", 0] }] },
+                          $cond: [
+                            { $gt: [{ $size: "$$matches" }, 0] },
+                            { $add: [{ $ifNull: ["$$pd.onlineAmount", 0] }, { $ifNull: ["$$pd.cashAmount", 0] }] },
+                            0,
                           ],
                         },
                       },
@@ -398,6 +400,7 @@ async function handler(req, res, user) {
             closedAt: 1,
             closedDate: 1,
             submittedAmount: 1,
+            paymentDocs: 1, // include limited paymentDocs for frontend details (each has _id, createdAt, onlineAmount, cashAmount)
             paymentStatus: {
               $switch: {
                 branches: [
@@ -408,6 +411,8 @@ async function handler(req, res, user) {
               },
             },
             lastPaymentAt: { $max: "$paymentDocs.createdAt" },
+            clientAvatar: { $ifNull: ["$clientAvatar", "$avatar"] },
+            avatar: 1,
           },
         },
 
