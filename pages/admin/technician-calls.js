@@ -1,4 +1,3 @@
-// frontend: pages or app route component (technician-call.js / TechnicianCallsPage.jsx)
 "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
@@ -52,14 +51,13 @@ export default function TechnicianCallsPage() {
   const [techOptions, setTechOptions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [calls, setCalls] = useState([]);
-  const [payments, setPayments] = useState([]); // payments submitted in the selected range
+  const [payments, setPayments] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [statusTab, setStatusTab] = useState("Closed"); // Closed | Pending | Cancelled
   const [query, setQuery] = useState("");
   const [expandedCall, setExpandedCall] = useState(null);
-  const [expandedPayment, setExpandedPayment] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -93,9 +91,7 @@ export default function TechnicianCallsPage() {
       const qs = buildParams();
       const res = await fetch(`/api/admin/technician-calls?${qs}`, { cache: "no-store" });
       const data = await res.json();
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Failed to load technician stats");
-      }
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Failed to load technician stats");
 
       const technicians = (data.technicians || []).map(t => ({
         ...t,
@@ -124,6 +120,7 @@ export default function TechnicianCallsPage() {
         totalAmount: safeNum(p.totalAmount || (safeNum(p.onlineAmount) + safeNum(p.cashAmount))),
         onlineAmount: safeNum(p.onlineAmount),
         cashAmount: safeNum(p.cashAmount),
+        techId: p.techId ? String(p.techId) : (p.techIdStr ? String(p.techIdStr) : ""),
       }));
 
       setTechOptions(technicians);
@@ -154,26 +151,54 @@ export default function TechnicianCallsPage() {
   const activeTech = useMemo(() => (selectedTech === "all" ? null : techOptions.find(t => t._id === selectedTech) || null), [selectedTech, techOptions]);
   const isAllMode = !activeTech;
 
+  // payments map by tech for quick sums (payments are flattened per-call entries)
+  const paymentsByTech = useMemo(() => {
+    const m = new Map();
+    payments.forEach(p => {
+      const tid = String(p.techId || "");
+      const amt = safeNum(p.totalAmount || (safeNum(p.onlineAmount) + safeNum(p.cashAmount)));
+      m.set(tid, (m.get(tid) || 0) + amt);
+    });
+    return m;
+  }, [payments]);
+
+  // counts derived from calls
   const counts = {
     Closed: calls.filter(c => c.status === "Closed").length,
     Pending: calls.filter(c => c.status === "Pending").length,
     Cancelled: calls.filter(c => c.status === "Cancelled").length,
   };
-  // amounts: for Closed use submittedAmount (payments in selected payments-range), matches summary.monthSubmitted partly when aggregated across tech
-  const amounts = {
-    Closed: calls.filter(c => c.status === "Closed").reduce((s, c) => s + safeNum(c.submittedAmount), 0),
-    Pending: calls.filter(c => c.status === "Pending").reduce((s, c) => s + safeNum(c.price), 0),
-    Cancelled: calls.filter(c => c.status === "Cancelled").reduce((s, c) => s + safeNum(c.price), 0),
-  };
 
-  const filteredList = calls.filter(c =>
-    c.status === statusTab &&
-    (((c.clientName || c.customerName || "").toLowerCase().includes(query.toLowerCase())) ||
-     ((c.phone || "").includes(query)) ||
-     ((c.address || "").toLowerCase().includes(query.toLowerCase())))
+  // amount displayed in the panel header "Total: ₹" — context-aware to avoid mismatch
+  const totalPanelAmount = useMemo(() => {
+    if (selectedTech !== "all") {
+      // if viewing specific technician and Closed tab -> show payments collected for that tech in the selected payments-range
+      if (statusTab === "Closed") {
+        return paymentsByTech.get(selectedTech) || 0;
+      } else {
+        // for Pending/Cancelled show sum of call.price for those calls (keeps previous meaning)
+        return calls.filter(c => c.techId === selectedTech && c.status === statusTab).reduce((s, c) => s + safeNum(c.price), 0);
+      }
+    } else {
+      // no tech selected: for Closed show overall payments submitted in range (summary.monthSubmitted)
+      if (statusTab === "Closed") {
+        return safeNum(summary?.monthSubmitted || 0);
+      } else {
+        // for Pending/Cancelled across all techs show sum of call.price in calls filtered by status
+        return calls.filter(c => c.status === statusTab).reduce((s, c) => s + safeNum(c.price), 0);
+      }
+    }
+  }, [selectedTech, statusTab, paymentsByTech, calls, summary]);
+
+  const filteredList = calls.filter(
+    (c) =>
+      c.status === statusTab &&
+      (((c.clientName || c.customerName || "").toLowerCase().includes(query.toLowerCase()) ||
+        (c.phone || "").includes(query) ||
+        (c.address || "").toLowerCase().includes(query.toLowerCase())))
   );
 
-  const pendingClients = calls.filter(c => c.status === "Pending").map(c => ({ id: c._id, name: c.clientName || c.customerName || c.phone || "Unnamed" }));
+  const pendingClients = calls.filter((c) => c.status === "Pending").map((c) => ({ id: c._id, name: c.clientName || c.customerName || c.phone || "Unnamed" }));
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -188,7 +213,9 @@ export default function TechnicianCallsPage() {
             </motion.div>
             <div>
               <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Technician Calls</h1>
-              <p className="text-xs sm:text-sm text-slate-500">Calls counted by close-month; payments counted by submission-month. Reconciled amounts shown.</p>
+              <p className="text-xs sm:text-sm text-slate-500">
+                Calls counted by close-month; payments counted by submission-month. Reconciled amounts shown.
+              </p>
             </div>
           </div>
 
@@ -203,9 +230,12 @@ export default function TechnicianCallsPage() {
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filters (same as before) */}
         <section className="rounded-2xl bg-white border border-slate-200/70 shadow-sm p-3 sm:p-4 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide"><FiFilter className="text-slate-500" /> Filters</div>
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide">
+            <FiFilter className="text-slate-500" /> Filters
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
             <div>
               <label className="block text-[11px] font-semibold text-slate-500 mb-1">Technician</label>
@@ -213,7 +243,11 @@ export default function TechnicianCallsPage() {
                 <span className="absolute left-2 top-2.5 text-slate-400 text-sm"><FiUser /></span>
                 <select value={selectedTech} onChange={(e) => setSelectedTech(e.target.value)} className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50/60 outline-none">
                   <option value="all">All Technicians</option>
-                  {techOptions.map(t => <option key={t._id} value={t._id}>{t.name}{t.phone ? ` (${t.phone})` : ""}</option>)}
+                  {techOptions.map((t) => (
+                    <option key={t._id} value={t._id}>
+                      {t.name}{t.phone ? ` (${t.phone})` : ""}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -236,7 +270,9 @@ export default function TechnicianCallsPage() {
               <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50/60 outline-none" />
             </div>
 
-            <div className="flex justify-end"><button onClick={handleApply} className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition">Apply</button></div>
+            <div className="flex justify-end">
+              <button onClick={handleApply} className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition">Apply</button>
+            </div>
           </div>
         </section>
 
@@ -248,8 +284,8 @@ export default function TechnicianCallsPage() {
           <SummaryCard icon={<FiDollarSign />} label="Amount (Lifetime)" value={`₹${safeNum(summary?.totalAmount).toFixed(0)}`} accent="from-violet-500 to-violet-600" />
         </section>
 
-        {/* Payments submitted in this month (NEW) */}
-        {/* <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
+        {/* Payments submitted (This Month) — this will match payment.js totals */}
+        <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="font-semibold text-slate-800">Payments submitted (This Month)</div>
             <div className="text-sm text-slate-500 font-medium">Total: ₹{safeNum(summary?.monthSubmitted).toFixed(0)}</div>
@@ -277,9 +313,9 @@ export default function TechnicianCallsPage() {
               ))}
             </div>
           )}
-        </section> */}
+        </section>
 
-        {/* Technicians + Detail (calls closed in month) */}
+        {/* Technicians + Detail */}
         <section className="space-y-4">
           {isAllMode && (
             <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-3 sm:p-4 space-y-3">
@@ -288,15 +324,17 @@ export default function TechnicianCallsPage() {
                 <span className="text-[11px] text-slate-500">{techOptions.length} technicians</span>
               </div>
 
-              {loading ? (
+              {loading && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-28 rounded-2xl bg-slate-100/70 animate-pulse" />)}
+                  {Array.from({ length: 3 }).map((_, i) => (<div key={i} className="h-28 rounded-2xl bg-slate-100/70 animate-pulse" />))}
                 </div>
-              ) : techOptions.length === 0 ? (
-                <div className="p-6 text-center text-sm text-slate-500">No technicians found.</div>
-              ) : (
+              )}
+
+              {!loading && techOptions.length === 0 && <div className="p-6 text-center text-sm text-slate-500">No technicians found.</div>}
+
+              {!loading && techOptions.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {techOptions.map(t => (
+                  {techOptions.map((t) => (
                     <motion.button key={t._id} whileTap={{ scale: 0.97 }} onClick={() => setSelectedTech(t._id)} className="text-left rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 transition shadow-sm hover:shadow-md">
                       <div className="flex items-center gap-3">
                         <div className="h-12 w-12 rounded-xl overflow-hidden bg-slate-200 flex-shrink-0">
@@ -345,19 +383,22 @@ export default function TechnicianCallsPage() {
                     <div className="text-[12px] text-slate-500">Selected technician overview</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2"><button onClick={() => setSelectedTech("all")} className="px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">Clear filter</button></div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setSelectedTech("all")} className="px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200">Clear filter</button>
+                </div>
               </div>
 
               <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    {["Closed","Pending","Cancelled"].map(st => (
-                      <button key={st} onClick={() => setStatusTab(st)} className={`px-3 py-2 rounded-lg text-sm font-semibold ${statusTab===st ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-700"} transition`}>
+                    {["Closed", "Pending", "Cancelled"].map((st) => (
+                      <button key={st} onClick={() => setStatusTab(st)} className={`px-3 py-2 rounded-lg text-sm font-semibold ${statusTab === st ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-700"} transition`}>
                         {st} <span className="ml-2 inline-block text-xs bg-white/10 px-2 py-0.5 rounded-md">{counts[st] || 0}</span>
                       </button>
                     ))}
                   </div>
-                  <div className="text-sm text-slate-500">Total: ₹{safeNum(amounts[statusTab]).toFixed(0)}</div>
+
+                  <div className="text-sm text-slate-500">Total: ₹{safeNum(totalPanelAmount).toFixed(0)}</div>
                 </div>
 
                 <div className="mb-3 text-sm text-slate-500">Showing <span className="font-semibold text-slate-700">{statusTab}</span> calls for selected period.</div>
@@ -367,18 +408,18 @@ export default function TechnicianCallsPage() {
                     <div className="font-semibold text-slate-800">Pending calls: {pendingClients.length}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {pendingClients.slice(0, 30).map(p => <div key={p.id} className="px-2 py-1 bg-white border rounded-md text-xs text-slate-700">{p.name}</div>)}
-                      {pendingClients.length > 30 && <div className="px-2 py-1 text-xs text-slate-500">and {pendingClients.length-30} more...</div>}
+                      {pendingClients.length > 30 && <div className="px-2 py-1 text-xs text-slate-500">and {pendingClients.length - 30} more...</div>}
                     </div>
                   </div>
                 )}
 
                 {loading ? (
-                  <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 rounded-xl bg-slate-100/70 animate-pulse" />)}</div>
+                  <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => (<div key={i} className="h-16 rounded-xl bg-slate-100/70 animate-pulse" />))}</div>
                 ) : filteredList.length === 0 ? (
                   <div className="p-4 text-sm text-slate-500">No calls in this category.</div>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {filteredList.map(c => {
+                    {filteredList.map((c) => {
                       const clientName = c.clientName || c.customerName || "—";
                       const avatar = c.clientAvatar;
                       const matched = safeNum(c.submittedAmount);
