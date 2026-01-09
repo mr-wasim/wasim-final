@@ -285,7 +285,7 @@ export default function TechnicianCallsPage() {
         </section>
 
         {/* Payments submitted (This Month) — this will match payment.js totals */}
-        <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
+        {/* <section className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="font-semibold text-slate-800">Payments submitted (This Month)</div>
             <div className="text-sm text-slate-500 font-medium">Total: ₹{safeNum(summary?.monthSubmitted).toFixed(0)}</div>
@@ -313,7 +313,7 @@ export default function TechnicianCallsPage() {
               ))}
             </div>
           )}
-        </section>
+        </section> */}
 
         {/* Technicians + Detail */}
         <section className="space-y-4">
