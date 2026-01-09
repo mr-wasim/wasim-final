@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/router";
 import Header from "../../components/Header";
 import toast from "react-hot-toast";
@@ -12,16 +12,9 @@ import {
   FiRefreshCw,
   FiPhoneCall,
   FiDollarSign,
-  FiClock,
   FiChevronDown,
   FiChevronUp,
 } from "react-icons/fi";
-
-// TechnicianCallsPage.jsx
-// Clean, responsive UI focused on accurate payment reconciliation.
-// - Keeps original header: Calls Closed (This Month), Calls Closed (Lifetime), Amount (This Month), Amount (Lifetime)
-// - Pending tab shows only count and who is pending (compact list) — no extra clutter
-// - Uses backend /api/admin/technician-calls which must implement accurate submittedAmount logic (matches payments API)
 
 function formatDateTime(value) {
   if (!value) return "—";
@@ -100,7 +93,6 @@ export default function TechnicianCallsPage() {
     const params = new URLSearchParams();
     if (month) params.set("month", month);
     if (selectedTech && selectedTech !== "all") params.set("techId", selectedTech);
-    // keep dateFrom/dateTo in params — backend supports them; UI keeps them but header preserved as original
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
     return params.toString();
@@ -140,7 +132,7 @@ export default function TechnicianCallsPage() {
             closedAt: c.closedAt ? new Date(c.closedAt) : null,
             createdAt: c.createdAt ? new Date(c.createdAt) : null,
             clientAvatar: c.clientAvatar || c.avatar || c.profilePic || null,
-            paymentDocs: c.paymentDocs || [],
+            matchedPayments: c.matchedPayments || [],
           };
         });
 
@@ -232,7 +224,7 @@ export default function TechnicianCallsPage() {
           </div>
         </div>
 
-        {/* Filters (kept as before) */}
+        {/* Filters */}
         <section className="rounded-2xl bg-white border border-slate-200/70 shadow-sm p-3 sm:p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 uppercase tracking-wide">
             <FiFilter className="text-slate-500" /> Filters
@@ -278,7 +270,7 @@ export default function TechnicianCallsPage() {
           </div>
         </section>
 
-        {/* Summary: restore original 4 cards exactly as before */}
+        {/* Summary (original 4 cards) */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (This Month)" value={summary?.monthClosed ?? 0} accent="from-indigo-500 to-indigo-600" />
           <SummaryCard icon={<FiPhoneCall />} label="Calls Closed (Lifetime)" value={summary?.totalClosed ?? 0} accent="from-blue-500 to-blue-600" />
@@ -297,7 +289,7 @@ export default function TechnicianCallsPage() {
 
               {loading && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                   {Array.from({ length: 3 }).map((_, i) => (
+                  {Array.from({ length: 3 }).map((_, i) => (
                     <div key={i} className="h-28 rounded-2xl bg-slate-100/70 animate-pulse" />
                   ))}
                 </div>
@@ -364,7 +356,7 @@ export default function TechnicianCallsPage() {
               <div className="rounded-2xl bg-white border border-slate-200/80 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    {['Closed', 'Pending', 'Cancelled'].map((st) => (
+                    {["Closed", "Pending", "Cancelled"].map((st) => (
                       <button key={st} onClick={() => setStatusTab(st)} className={`px-3 py-2 rounded-lg text-sm font-semibold ${statusTab === st ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-700"} transition`}>
                         {st} <span className="ml-2 inline-block text-xs bg-white/10 px-2 py-0.5 rounded-md">{counts[st] || 0}</span>
                       </button>
@@ -377,7 +369,7 @@ export default function TechnicianCallsPage() {
                 <div className="mb-3 text-sm text-slate-500">Showing <span className="font-semibold text-slate-700">{statusTab}</span> calls for selected period.</div>
 
                 {/* Pending compact section: only when Pending tab selected show names and count */}
-                {statusTab === 'Pending' && (
+                {statusTab === "Pending" && (
                   <div className="mb-3 rounded-md border border-slate-100 bg-slate-50 p-3 text-sm">
                     <div className="font-semibold text-slate-800">Pending calls: {pendingClients.length}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -400,8 +392,8 @@ export default function TechnicianCallsPage() {
                       const avatar = c.clientAvatar;
                       const matched = safeNum(c.submittedAmount);
                       const price = safeNum(c.price);
-                      const matchPercent = price > 0 ? Math.min(100, Math.round((matched / price) * 100)) : 0;
                       const afterClosedMs = (c.lastPaymentAt && c.closedAt) ? (c.lastPaymentAt - c.closedAt) : null;
+                      const paymentStatus = c.paymentStatus || (matched >= price ? "Submitted" : matched > 0 ? "Partial" : "Unsubmitted");
 
                       return (
                         <motion.div key={c._id} whileHover={{ backgroundColor: "#f8fafc" }} className="px-3 py-3 flex flex-col gap-3">
@@ -424,7 +416,10 @@ export default function TechnicianCallsPage() {
                                   <div>Price: <span className="font-semibold">₹{price.toFixed(0)}</span></div>
                                   <div>
                                     Collected: <span className="font-semibold">₹{matched.toFixed(0)}</span>
-                                    {matched >= price ? <span className="ml-2 text-xs text-emerald-700">(matched)</span> : matched > 0 ? <span className="ml-2 text-xs text-amber-600">(partial)</span> : <span className="ml-2 text-xs text-rose-600">(unsubmitted)</span>}
+                                    {/* status badge */}
+                                    <span className={`ml-3 inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-md ${paymentStatus === "Submitted" ? "bg-emerald-100 text-emerald-700" : paymentStatus === "Partial" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"}`}>
+                                      {paymentStatus}
+                                    </span>
                                   </div>
                                 </div>
 
@@ -432,14 +427,6 @@ export default function TechnicianCallsPage() {
                                   <div>Last payment: {c.lastPaymentAt ? formatDateTime(c.lastPaymentAt) : "—"}</div>
                                   <div>Δ: {afterClosedMs ? `${formatDuration(afterClosedMs)} after close` : "—"}</div>
                                 </div>
-                              </div>
-
-                              {/* progress */}
-                              <div className="mt-3">
-                                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                                  <div style={{ width: `${matchPercent}%` }} className={`h-2 ${matchPercent >= 100 ? "bg-emerald-500" : matchPercent > 0 ? "bg-amber-400" : "bg-rose-400"}`} />
-                                </div>
-                                <div className="text-[11px] text-slate-500 mt-1">{matchPercent}% of price submitted</div>
                               </div>
                             </div>
 
@@ -460,28 +447,30 @@ export default function TechnicianCallsPage() {
                               >
                                 <div className="mt-2 rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm text-slate-700 space-y-2">
                                   <div className="flex items-center justify-between">
-                                    <div className="font-semibold">Payment details</div>
-                                    <div className="text-xs text-slate-500">Status: <span className="font-semibold">{c.paymentStatus || (matched >= price ? "Submitted" : matched > 0 ? "Partial" : "Unsubmitted")}</span></div>
+                                    <div className="font-semibold">Payment details & timeline</div>
+                                    <div className="text-xs text-slate-500">Status: <span className="font-semibold">{paymentStatus}</span></div>
                                   </div>
 
-                                  {c.paymentDocs && c.paymentDocs.length > 0 ? (
+                                  <div className="text-xs text-slate-500">Call closed at: <span className="font-medium text-slate-700">{formatDateTime(c.closedAt)}</span></div>
+
+                                  {c.matchedPayments && c.matchedPayments.length > 0 ? (
                                     <div className="space-y-2">
-                                      {c.paymentDocs.map((pd) => (
-                                        <div key={pd._id} className="flex items-center justify-between bg-white rounded-md p-2 border border-slate-100">
+                                      {c.matchedPayments.map((mp, idx) => (
+                                        <div key={`${mp.paymentId}-${idx}`} className="flex items-center justify-between bg-white rounded-md p-2 border border-slate-100">
                                           <div className="text-[13px]">
-                                            <div className="font-medium">{new Date(pd.createdAt).toLocaleString()}</div>
-                                            <div className="text-xs text-slate-500">Mode: record</div>
+                                            <div className="font-medium">{formatDateTime(mp.paymentCreatedAt)}</div>
+                                            <div className="text-xs text-slate-500">Receiver: {mp.receiver || "—"} • Mode: {mp.mode || "—"}</div>
                                           </div>
-                                          <div className="text-sm text-slate-700">
-                                            <div>Online: ₹{safeNum(pd.onlineAmount).toFixed(0)}</div>
-                                            <div>Cash: ₹{safeNum(pd.cashAmount).toFixed(0)}</div>
-                                            <div className="font-semibold">Total: ₹{(safeNum(pd.onlineAmount) + safeNum(pd.cashAmount)).toFixed(0)}</div>
+                                          <div className="text-sm text-slate-700 text-right">
+                                            <div>Online: ₹{safeNum(mp.onlineAmount).toFixed(0)}</div>
+                                            <div>Cash: ₹{safeNum(mp.cashAmount).toFixed(0)}</div>
+                                            <div className="font-semibold">Total: ₹{(safeNum(mp.onlineAmount) + safeNum(mp.cashAmount)).toFixed(0)}</div>
                                           </div>
                                         </div>
                                       ))}
                                     </div>
                                   ) : (
-                                    <div className="text-xs text-slate-500">No payment records found for this call in the selected period.</div>
+                                    <div className="text-xs text-slate-500">No matched payment entries found for this call in the selected period.</div>
                                   )}
                                 </div>
                               </motion.div>

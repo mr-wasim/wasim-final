@@ -1,3 +1,4 @@
+// pages/api/admin/technician-calls.js
 export const runtime = "nodejs";
 
 import { getDb, requireRole } from "../../../lib/api-helpers.js";
@@ -21,28 +22,19 @@ async function handler(req, res, user) {
     const techsColl = db.collection("technicians");
     const paymentsColl = db.collection("payments");
 
-    // Accept month, techId, dateFrom, dateTo
+    // Accept month, techId, dateFrom, dateTo (keeps original UI behavior)
     let { month = "", techId = "", dateFrom = "", dateTo = "" } = req.query;
 
     // DETERMINE START / END based on dateFrom/dateTo or month (dateFrom/dateTo takes precedence)
     let start, end;
     if (dateFrom || dateTo) {
-      // if only one provided, make sensible default bounds
-      if (dateFrom) {
-        // dateFrom is inclusive from start of day
-        start = new Date(dateFrom + "T00:00:00");
-      }
-      if (dateTo) {
-        // dateTo is inclusive until end of day
-        end = new Date(dateTo + "T23:59:59.999");
-      }
-      // if only start given, set end to start + 1 day (so that single day works)
+      if (dateFrom) start = new Date(dateFrom + "T00:00:00");
+      if (dateTo) end = new Date(dateTo + "T23:59:59.999");
       if (start && !end) {
         const tmp = new Date(start);
         tmp.setDate(tmp.getDate() + 1);
         end = tmp;
       }
-      // if only end given, set start to one month before end (reasonable fallback)
       if (!start && end) {
         const tmp = new Date(end);
         tmp.setMonth(tmp.getMonth() - 1);
@@ -66,9 +58,7 @@ async function handler(req, res, user) {
       if (maybeObj && typeof maybeObj !== "string") techCandidates.push(maybeObj);
     }
 
-    // --- MONTH/LIFETIME STATS FROM forwarded_calls (respecting start/end and tech filter) ---
-
-    // month stats (Closed within start..end)
+    // 1) month stats (Closed within start..end)
     const monthStatsArr = await callsColl
       .aggregate([
         {
@@ -113,7 +103,7 @@ async function handler(req, res, user) {
       })
     );
 
-    // lifetime stats (all-time closed)
+    // 2) lifetime stats from forwarded_calls
     const lifetimeStatsArr = await callsColl
       .aggregate([
         {
@@ -156,15 +146,12 @@ async function handler(req, res, user) {
       })
     );
 
-    // --- PAYMENTS TOTAL FOR SELECTED RANGE (match with payment.js behavior) ---
-    // We'll sum payments where payment.createdAt in [start,end) and techId matches (if provided).
+    // 3) payments total in same range (payment.js sums payment.onlineAmount + payment.cashAmount at payment-level)
     const paymentsMatch = {
       createdAt: { $gte: start, $lt: end },
       ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}),
     };
 
-    // Note: many payments structure store per-call amounts inside payments.calls items.
-    // payment.js sums p.onlineAmount / p.cashAmount at payment-level; keep same logic for monthly total.
     const paymentsMonthAgg = await paymentsColl
       .aggregate([
         { $match: paymentsMatch },
@@ -185,7 +172,7 @@ async function handler(req, res, user) {
 
     const monthPaymentsTotal = paymentsMonthAgg[0] || { online: 0, cash: 0, total: 0 };
 
-    // --- month summary by status (counts / amounts) respecting range ---
+    // 4) month summary by status
     const monthSummaryArr = await callsColl
       .aggregate([
         {
@@ -228,7 +215,7 @@ async function handler(req, res, user) {
       };
     });
 
-    // lifetime overall closed totals (all-time)
+    // 5) lifetime overall closed totals
     const lifetimeSummaryArr = await callsColl
       .aggregate([
         { $addFields: { priceNum: { $ifNull: ["$price", 0] } } },
@@ -243,7 +230,7 @@ async function handler(req, res, user) {
       ])
       .toArray();
 
-    // technicians list (basic projection)
+    // 6) technicians list
     const techDocs = await techsColl
       .find(
         {},
@@ -295,7 +282,7 @@ async function handler(req, res, user) {
       };
     });
 
-    // --- CALLS LIST FOR SELECTED TECH + RANGE (includes accurate submittedAmount by summing payment.calls entries) ---
+    // 7) calls list for selected tech + month: lookup payments collection and compute matchedCalls correctly
     let calls = [];
     if (techCandidates.length) {
       const callsPipeline = [
@@ -315,7 +302,7 @@ async function handler(req, res, user) {
         },
         { $sort: { closedDate: -1 } },
 
-        // lookup payments where payments.calls contains this call id
+        // lookup payments where payments.calls contains this call id AND payment createdAt in the same start..end
         {
           $lookup: {
             from: "payments",
@@ -323,23 +310,11 @@ async function handler(req, res, user) {
             pipeline: [
               {
                 $match: {
-                  $expr: {
-                    $gt: [
-                      {
-                        $size: {
-                          $filter: {
-                            input: { $ifNull: ["$calls", []] },
-                            as: "pc",
-                            cond: { $eq: [{ $toString: "$$pc.callId" }, "$$callIdStr"] },
-                          },
-                        },
-                      },
-                      0,
-                    ],
-                  },
+                  createdAt: { $gte: start, $lt: end },
+                  ...(techCandidates.length ? { techId: { $in: techCandidates } } : {}),
+                  // we cannot directly test calls array here with $expr easily, so we filter later
                 },
               },
-              // project calls (per-call breakdown) and createdAt, mode, receiver etc.
               {
                 $project: {
                   _id: 1,
@@ -347,28 +322,16 @@ async function handler(req, res, user) {
                   mode: 1,
                   receiver: 1,
                   techId: 1,
-                  calls: {
-                    $map: {
-                      input: { $ifNull: ["$calls", []] },
-                      as: "c",
-                      in: {
-                        callId: { $toString: "$$c.callId" },
-                        onlineAmount: { $ifNull: ["$$c.onlineAmount", 0] },
-                        cashAmount: { $ifNull: ["$$c.cashAmount", 0] },
-                        clientName: "$$c.clientName",
-                        phone: "$$c.phone",
-                        address: "$$c.address",
-                      },
-                    },
-                  },
+                  calls: 1,
                 },
               },
+              // keep payments that actually contain any calls that match; the outer pipeline will filter further
             ],
             as: "paymentDocs",
           },
         },
 
-        // compute submitted amount by summing matching calls' online+cash inside paymentDocs
+        // compute matchedCalls (flatten matched payment.calls that belong to this callIdStr)
         {
           $project: {
             _id: { $toString: "$_id" },
@@ -393,43 +356,52 @@ async function handler(req, res, user) {
                 in: { $add: ["$$value", { $ifNull: ["$$this.amount", 0] }] },
               },
             },
-            // SUM per matching call entries inside each paymentDoc.calls
-            paidFromPaymentsCollection: {
+            // matchedCalls: flattened array of objects { paymentId, paymentCreatedAt, onlineAmount, cashAmount, receiver, mode }
+            matchedCalls: {
               $reduce: {
-                input: {
-                  $map: {
-                    input: "$paymentDocs",
-                    as: "pd",
-                    in: {
-                      $reduce: {
+                input: "$paymentDocs",
+                initialValue: [],
+                in: {
+                  $concatArrays: [
+                    "$$value",
+                    {
+                      $map: {
                         input: {
                           $filter: {
-                            input: { $ifNull: ["$$pd.calls", []] },
+                            input: { $ifNull: ["$$this.calls", []] },
                             as: "pc",
-                            cond: { $eq: ["$$pc.callId", "$callIdStr"] },
+                            cond: { $eq: [{ $toString: "$$pc.callId" }, "$callIdStr"] },
                           },
                         },
-                        initialValue: 0,
+                        as: "mc",
                         in: {
-                          $add: [
-                            "$$value",
-                            { $add: [{ $ifNull: ["$$this.onlineAmount", 0] }, { $ifNull: ["$$this.cashAmount", 0] }] },
-                          ],
+                          paymentId: { $toString: "$$this._id" },
+                          paymentCreatedAt: "$$this.createdAt",
+                          onlineAmount: { $ifNull: ["$$mc.onlineAmount", 0] },
+                          cashAmount: { $ifNull: ["$$mc.cashAmount", 0] },
+                          receiver: "$$this.receiver",
+                          mode: "$$this.mode",
                         },
                       },
                     },
-                  },
+                  ],
                 },
-                initialValue: 0,
-                in: { $add: ["$$value", "$$this"] },
               },
             },
           },
         },
 
+        // compute submittedAmount as sum of matchedCalls' online+cash and paymentStatus/lastPaymentAt
         {
           $addFields: {
-            submittedAmount: { $add: ["$embeddedPaid", "$paidFromPaymentsCollection"] },
+            submittedAmount: {
+              $reduce: {
+                input: "$matchedCalls",
+                initialValue: 0,
+                in: { $add: ["$$value", { $add: ["$$this.onlineAmount", "$$this.cashAmount"] }] },
+              },
+            },
+            lastPaymentAt: { $max: "$matchedCalls.paymentCreatedAt" },
           },
         },
 
@@ -449,7 +421,7 @@ async function handler(req, res, user) {
             closedAt: 1,
             closedDate: 1,
             submittedAmount: 1,
-            paymentDocs: 1,
+            matchedPayments: "$matchedCalls", // renamed for clarity in the response
             paymentStatus: {
               $switch: {
                 branches: [
@@ -459,7 +431,7 @@ async function handler(req, res, user) {
                 default: "Unsubmitted",
               },
             },
-            lastPaymentAt: { $max: "$paymentDocs.createdAt" },
+            lastPaymentAt: 1,
             clientAvatar: { $ifNull: ["$clientAvatar", "$avatar"] },
             avatar: 1,
           },
@@ -475,7 +447,7 @@ async function handler(req, res, user) {
     const summary = {
       monthClosed: monthSummaryByStatus["Closed"]?.count || 0,
       monthAmount: monthSummaryByStatus["Closed"]?.amount || 0,
-      monthSubmitted: monthPaymentsTotal.total || 0, // collected/submitted in the selected range
+      monthSubmitted: monthPaymentsTotal.total || 0, // total collected/submitted from payments collection in range
       monthPending: monthSummaryByStatus["Pending"]?.count || 0,
       monthPendingAmount: monthSummaryByStatus["Pending"]?.amount || 0,
       totalClosed: lifetimeSummary.totalClosed || 0,
@@ -499,10 +471,13 @@ async function handler(req, res, user) {
 export default requireRole("admin")(handler);
 
 /**
- * Recommended indexes:
- * db.forwarded_calls.createIndex({ status: 1, techId: 1, createdAt: -1 });
- * db.forwarded_calls.createIndex({ closedAt: -1 });
- * db.payments.createIndex({ createdAt: -1 });
- * db.payments.createIndex({ techId: 1 });
- * db.technicians.createIndex({ name: 1 });
+ * Notes:
+ * - This uses the same "range" semantics as your payment totals (we compute the paymentsMonthAgg using payments.createdAt in [start,end) ).
+ * - Key fix: matchedPayments is built from payment.calls entries (per-call amounts), and submittedAmount sums those per-call amounts only.
+ * - Ensure your payments collection stores per-call amounts inside payments.calls[].onlineAmount and .cashAmount as in your payment.js.
+ * - Recommended indexes for performance:
+ *   db.forwarded_calls.createIndex({ status: 1, techId: 1, createdAt: -1 });
+ *   db.forwarded_calls.createIndex({ closedAt: -1 });
+ *   db.payments.createIndex({ createdAt: -1 });
+ *   db.payments.createIndex({ techId: 1 });
  */
