@@ -247,7 +247,7 @@ export default function TechnicianCallsPage() {
           <SmallCard icon={<FiPhoneCall />} label="Calls Closed (This Month)" value={summary ? summary.monthClosed : techs.reduce((s, t) => s + (t.monthClosed || 0), 0)} />
           <SmallCard icon={<FiUsers />} label="Calls Closed (Lifetime)" value={summary ? summary.totalClosed : techs.reduce((s, t) => s + (t.totalClosed || 0), 0)} />
           <SmallCard icon={<FiDollarSign />} label="Amount (This Month)" value={`₹${safeNum(summary?.monthAmount ?? techs.reduce((s,t)=>s + (t.monthAmount||t.monthSubmitted||0),0)).toFixed(0)}`} />
-          <SmallCard icon={<FiDollarSign />} label="Amount (Lifetime)" value={`₹${safeNum(summary?.totalAmount ?? techs.reduce((s,t)=>s + (t.totalAmount||0),0)).toFixed(0)}`} />
+          {/* <SmallCard icon={<FiDollarSign />} label="Amount (Lifetime)" value={`₹${safeNum(summary?.totalAmount ?? techs.reduce((s,t)=>s + (t.totalAmount||0),0)).toFixed(0)}`} /> */}
         </div>
 
         {/* Technician overview / detail */}
