@@ -9,9 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
 
 // 🔊 SUCCESS SOUND (forward.mp3)
-const successSound =
-  typeof window !== "undefined" ? new Audio("/forward.mp3") : null;
-
+const successSound = typeof window !== "undefined" ? new Audio("/forward.mp3") : null;
 function playSuccessSound() {
   try {
     if (!successSound) return;
@@ -34,6 +32,12 @@ function normalizeKey(clientName = "", phone = "", address = "") {
   );
 }
 
+function isClosedStatus(status) {
+  if (!status) return false;
+  const s = String(status).toLowerCase();
+  return ["closed", "completed", "done", "resolved", "finished"].some((x) => s.includes(x));
+}
+
 export default function Payments() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,8 +50,9 @@ export default function Payments() {
     receiverSignature: "",
   });
 
-  const sigRef = useRef();
+  const sigRef = useRef(null);
   const [canvasWidth, setCanvasWidth] = useState(500);
+  const [sigEmpty, setSigEmpty] = useState(true);
 
   // 🔹 Call selection states (multi-call)
   const [calls, setCalls] = useState([]); // lifetime merged calls with paymentStatus
@@ -55,7 +60,7 @@ export default function Payments() {
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [callSearch, setCallSearch] = useState("");
 
-  // Modal sub-tab: "pending" or "paid" (user requested remove "all")
+  // Modal sub-tab: "pending" or "paid"
   const [modalTab, setModalTab] = useState("pending");
   const [showAllInModal, setShowAllInModal] = useState(false);
 
@@ -185,7 +190,6 @@ export default function Payments() {
     }
   }, []);
 
-  // первая загрузка calls
   useEffect(() => {
     if (!user) return;
     loadCalls();
@@ -248,16 +252,36 @@ export default function Payments() {
 
   // ✅ Clear signature
   const clearSig = useCallback(() => {
-    sigRef.current?.clear();
+    try {
+      sigRef.current?.clear();
+    } catch {}
     setForm((prev) => ({ ...prev, receiverSignature: "" }));
+    setSigEmpty(true);
   }, []);
 
   // ✅ Input handler
   const handleChange = useCallback((field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value })), []);
 
+  // signature onEnd handler
+  const handleSigEnd = useCallback(() => {
+    try {
+      const data = sigRef.current?.toDataURL() || "";
+      setForm((prev) => ({ ...prev, receiverSignature: data }));
+      const empty = sigRef.current?.isEmpty ? sigRef.current.isEmpty() : !data;
+      setSigEmpty(Boolean(empty));
+    } catch (err) {
+      // ignore
+    }
+  }, []);
+
   // 🔹 Add call to selected list (multi-select)
   const addCallToSelected = useCallback((call) => {
     if (!call) return;
+    // prevent adding already paid calls
+    if (call.paymentStatus === "Paid") {
+      toast.error("Call already paid — cannot select");
+      return;
+    }
     setSelectedCalls((prev) => {
       if (prev.some((c) => c._id === call._id)) return prev;
       return [
@@ -277,7 +301,9 @@ export default function Payments() {
   }, []);
 
   const updateSelectedAmount = useCallback((id, field, value) => {
-    setSelectedCalls((prev) => prev.map((c) => (c._id === id ? { ...c, [field]: value } : c)));
+    // Ensure only numbers and no negative
+    const val = value === "" ? "" : String(value).replace(/[^\d.-]/g, "");
+    setSelectedCalls((prev) => prev.map((c) => (c._id === id ? { ...c, [field]: val } : c)));
   }, []);
 
   // 🔢 Totals
@@ -300,8 +326,13 @@ export default function Payments() {
     // Base: exclude canceled always
     let base = calls.filter((c) => String(c.status || "").toLowerCase() !== "canceled");
 
-    if (modalTab === "paid") base = base.filter((c) => c.paymentStatus === "Paid");
-    else /* pending */ base = base.filter((c) => c.paymentStatus !== "Paid");
+    if (modalTab === "paid") {
+      // only show calls that are *closed* and *paid*
+      base = base.filter((c) => c.paymentStatus === "Paid" && isClosedStatus(c.status));
+    } else {
+      // pending -> any non-paid calls
+      base = base.filter((c) => c.paymentStatus !== "Paid");
+    }
 
     // search
     if (q.length > 0) {
@@ -313,7 +344,7 @@ export default function Payments() {
       );
     }
 
-    // sorting: for pending -> newest first; for paid -> newest first as well
+    // sorting: newest first
     const sorted = [...base].sort((a, b) => b.createdAtTime - a.createdAtTime);
 
     // default limits (show small chunk unless showAll requested or search active)
@@ -333,10 +364,12 @@ export default function Payments() {
       e.preventDefault();
 
       if (!selectedCalls.length) return toast.error("Please select at least one call");
-      if (!form.receiver) return toast.error("Please enter paying name");
+      if (!form.receiver || !form.receiver.trim()) return toast.error("Please enter paying name");
 
-      const receiverSignature = form.receiverSignature || sigRef.current?.toDataURL();
-      if (!receiverSignature) return toast.error("Receiver signature required");
+      const receiverSignature = form.receiverSignature || (sigRef.current?.toDataURL ? sigRef.current.toDataURL() : "");
+      // ensure signature present client-side
+      const sigPresent = Boolean(receiverSignature) && !(sigRef.current && sigRef.current.isEmpty && sigRef.current.isEmpty());
+      if (!sigPresent) return toast.error("Receiver signature required");
 
       let mode = "";
       if (totalOnline > 0 && totalCash > 0) mode = "Both";
@@ -411,6 +444,11 @@ export default function Payments() {
     [selectedCalls, form.receiver, form.receiverSignature, totalOnline, totalCash, totalCombined, deviceToken, clearSig, loadCalls]
   );
 
+  const canSubmit = useMemo(() => {
+    const sigPresent = Boolean(form.receiverSignature) || (sigRef.current && sigRef.current.isEmpty ? !sigRef.current.isEmpty() : !sigEmpty);
+    return selectedCalls.length > 0 && form.receiver && form.receiver.trim() && sigPresent && totalCombined > 0;
+  }, [selectedCalls.length, form.receiver, form.receiverSignature, sigEmpty, totalCombined]);
+
   // ✅ Skeleton UI while loading
   if (loading)
     return (
@@ -455,39 +493,45 @@ export default function Payments() {
             {/* 🔹 Selected Calls List with Payment Inputs */}
             {selectedCalls.length > 0 ? (
               <div className="space-y-2">
-                {selectedCalls.map((c) => (
-                  <div key={c._id} className="border rounded-xl p-3 bg-slate-50 flex flex-col gap-2">
-                    <div className="flex justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="truncate">
-                            <div className="text-sm font-semibold truncate">{c.clientName || "Unknown"}</div>
-                            <div className="text-xs text-gray-600">{c.phone || "-"}</div>
+                {selectedCalls.map((c) => {
+                  const closed = isClosedStatus(c.status);
+                  const badgeText = c.paymentStatus === "Paid" ? "Payment Done" : closed ? "PAYMENT PENDING" : "PENDING CASE";
+                  const badgeClass = c.paymentStatus === "Paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : closed ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-red-50 text-red-700 border-red-200";
+
+                  return (
+                    <div key={c._id} className="border rounded-xl p-3 bg-slate-50 flex flex-col gap-2">
+                      <div className="flex justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate">
+                              <div className="text-sm font-semibold truncate">{c.clientName || "Unknown"}</div>
+                              <div className="text-xs text-gray-600">{c.phone || "-"}</div>
+                            </div>
+
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${badgeClass}`}>
+                              {badgeText}
+                            </span>
                           </div>
 
-                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${c.paymentStatus === "Paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
-                            {c.paymentStatus === "Paid" ? "Payment Done" : "Pending Payment"}
-                          </span>
+                          <div className="text-xs text-gray-500 line-clamp-1">{c.address || "-"}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">{c.type || "Service"} • ₹{c.price}</div>
                         </div>
-
-                        <div className="text-xs text-gray-500 line-clamp-1">{c.address || "-"}</div>
-                        <div className="text-[11px] text-gray-400 mt-0.5">{c.type || "Service"} • ₹{c.price}</div>
+                        <button type="button" className="text-xs text-red-500 hover:text-red-600 flex-shrink-0" onClick={() => removeSelectedCall(c._id)}>✕ Remove</button>
                       </div>
-                      <button type="button" className="text-xs text-red-500 hover:text-red-600 flex-shrink-0" onClick={() => removeSelectedCall(c._id)}>✕ Remove</button>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <div className="mb-1 text-gray-600">Online Amount (₹)</div>
-                        <input type="number" className="w-full border rounded-lg px-2 py-1" value={c.onlineAmount} onChange={(e) => updateSelectedAmount(c._id, "onlineAmount", e.target.value)} min="0" />
-                      </div>
-                      <div>
-                        <div className="mb-1 text-gray-600">Cash Amount (₹)</div>
-                        <input type="number" className="w-full border rounded-lg px-2 py-1" value={c.cashAmount} onChange={(e) => updateSelectedAmount(c._id, "cashAmount", e.target.value)} min="0" />
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <div className="mb-1 text-gray-600">Online Amount (₹)</div>
+                          <input type="number" className="w-full border rounded-lg px-2 py-1" value={c.onlineAmount} onChange={(e) => updateSelectedAmount(c._id, "onlineAmount", e.target.value)} min="0" />
+                        </div>
+                        <div>
+                          <div className="mb-1 text-gray-600">Cash Amount (₹)</div>
+                          <input type="number" className="w-full border rounded-lg px-2 py-1" value={c.cashAmount} onChange={(e) => updateSelectedAmount(c._id, "cashAmount", e.target.value)} min="0" />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-xs text-gray-500 border border-dashed rounded-xl p-3 bg-slate-50">No calls selected yet. Select at least one call to record payment.</div>
@@ -510,13 +554,13 @@ export default function Payments() {
             <div>
               <div className="text-sm font-semibold mb-1">Receiver Signature</div>
               <div className="border rounded-xl overflow-hidden shadow-sm">
-                <SignaturePad ref={sigRef} canvasProps={{ className: "sigCanvas bg-white w-full", width: canvasWidth, height: 200 }} />
+                <SignaturePad ref={sigRef} onEnd={handleSigEnd} canvasProps={{ className: "sigCanvas bg-white w-full", width: canvasWidth, height: 200 }} />
               </div>
               <div className="text-xs text-gray-500 mt-1">Signature required. <button type="button" onClick={clearSig} className="underline">Clear</button></div>
             </div>
 
             {/* 🔹 Submit */}
-            <button className="bg-blue-600 text-white w-full rounded-lg py-2 font-medium hover:bg-blue-700 active:scale-95 transition disabled:opacity-60" type="submit">Submit Payment</button>
+            <button disabled={!canSubmit} className="bg-blue-600 text-white w-full rounded-lg py-2 font-medium hover:bg-blue-700 active:scale-95 transition disabled:opacity-60" type="submit">Submit Payment</button>
           </form>
         </div>
       </main>
@@ -551,20 +595,29 @@ export default function Payments() {
 
                 {!callsLoading && filteredCallsForModal.length === 0 && <div className="text-center text-gray-500 py-4 text-sm">No calls found.</div>}
 
-                {!callsLoading && filteredCallsForModal.map((c) => (
-                  <button key={c._id} type="button" onClick={() => addCallToSelected(c)} className="w-full border rounded-xl px-3 py-2 text-sm hover:bg-blue-50 text-left transition">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="font-semibold truncate">{c.clientName || "Unknown"}</div>
-                        <div className="text-xs text-gray-600">{c.phone}</div>
-                        <div className="text-xs text-gray-500 line-clamp-1">{c.address}</div>
-                        <div className="text-[11px] text-gray-400">{c.type || "Service"} • ₹{c.price}</div>
-                      </div>
+                {!callsLoading && filteredCallsForModal.map((c) => {
+                  const closed = isClosedStatus(c.status);
+                  const badgeText = c.paymentStatus === "Paid" ? "Payment Done" : closed ? "PAYMENT PENDING" : "PENDING CASE";
+                  const badgeClass = c.paymentStatus === "Paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : closed ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-red-50 text-red-700 border-red-200";
 
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${c.paymentStatus === "Paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{c.paymentStatus === "Paid" ? "Payment Done" : "Pending Payment"}</span>
-                    </div>
-                  </button>
-                ))}
+                  // disable selecting already paid items
+                  const disabled = c.paymentStatus === "Paid";
+
+                  return (
+                    <button key={c._id} type="button" onClick={() => !disabled && addCallToSelected(c)} disabled={disabled} className={`w-full border rounded-xl px-3 py-2 text-sm hover:bg-blue-50 text-left transition ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold truncate">{c.clientName || "Unknown"}</div>
+                          <div className="text-xs text-gray-600">{c.phone}</div>
+                          <div className="text-xs text-gray-500 line-clamp-1">{c.address}</div>
+                          <div className="text-[11px] text-gray-400">{c.type || "Service"} • ₹{c.price}</div>
+                        </div>
+
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${badgeClass}`}>{badgeText}</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Show more / collapse */}

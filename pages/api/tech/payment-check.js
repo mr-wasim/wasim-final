@@ -8,11 +8,6 @@ import { requireRole, getDb } from "../../../lib/api-helpers.js";
  *
  * paidCallIds = array of callId strings found in payments
  * paidKeys = array of normalized "name|phone|address" strings found in payments
- *
- * Logic:
- *  - Get technician's forwarded calls (their call _ids)
- *  - Query payments where techId == user.id OR payments.calls.callId in those call ids
- *  - Build two sets from payments: callId set and (name|phone|address) set
  */
 async function handler(req, res, user) {
   if (req.method !== "GET") return res.status(405).end();

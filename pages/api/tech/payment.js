@@ -24,31 +24,11 @@ function safeNumber(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Regex to match closed statuses (case-insensitive) */
+const CLOSED_STATUS_REGEX = /closed|completed|done|resolved|finished/i;
+
 /**
  * POST /api/tech/payment
- *
- * Expected body:
- * {
- *  receiver: string,
- *  mode: string,
- *  onlineAmount: number|string,
- *  cashAmount: number|string,
- *  receiverSignature: string (dataURL/base64),
- *  calls: [ { callId?, clientName, phone, address, type, price, onlineAmount, cashAmount } ]
- * }
- *
- * Behaviour:
- * - Validate inputs
- * - For each call with callId:
- *     * verify canonical forwarded_calls price equals provided price (fail if mismatch)
- *     * mark that call Paid and push payment entry (bulk)
- * - For calls without callId:
- *     * use regex match on name/phone/address + price to update matching forwarded_calls
- * - Save a payments document with techId and techUsername so admin can see which technician recorded it
- *
- * Performance notes:
- * - Uses bulkWrite for updates (fast)
- * - Recommend indexes on forwarded_calls: { _id:1 }, { clientName: "text" } or { phone:1 }, { address:1 }, { price:1 }
  */
 async function handler(req, res, user) {
   if (req.method !== "POST") return res.status(405).json({ success: false, error: "Method not allowed" });
@@ -102,7 +82,7 @@ async function handler(req, res, user) {
 
     // SERVER-SIDE VALIDATION: price checks for entries with callId (strict)
     // and also ensure entered amounts sum equals price.
-    // We'll fetch all forwarded_calls for the callIds in one query to validate quickly.
+
     const callIdsWithId = storedCalls.filter((s) => s.callId).map((s) => s.callId);
     const callObjectIds = [];
     const callStringIds = [];
@@ -116,7 +96,7 @@ async function handler(req, res, user) {
     if (callStringIds.length) idQuery.push({ _id: { $in: callStringIds } });
 
     if (idQuery.length) {
-      const found = await callsColl.find({ $or: idQuery }).project({ _id: 1, price: 1, clientName: 1, phone: 1, address: 1 }).toArray();
+      const found = await callsColl.find({ $or: idQuery }).project({ _id: 1, price: 1, clientName: 1, phone: 1, address: 1, status: 1 }).toArray();
       const foundMap = new Map(found.map((f) => [String(f._id), f]));
 
       for (const sc of storedCalls) {
@@ -132,6 +112,15 @@ async function handler(req, res, user) {
           return res.status(400).json({
             success: false,
             error: `Price mismatch for call ${sc.callId}. Expected ₹${expectedPrice}, entered ₹${entered}`,
+          });
+        }
+
+        // ENFORCEMENT: require that the forwarded_call is in a closed status before accepting payment
+        const docStatus = f.status || "";
+        if (!CLOSED_STATUS_REGEX.test(docStatus)) {
+          return res.status(400).json({
+            success: false,
+            error: `Call ${sc.callId} is not closed. Only closed calls are allowed to be marked as paid.`,
           });
         }
       }
@@ -184,10 +173,16 @@ async function handler(req, res, user) {
       if (ObjectId.isValid(sc.callId)) filterId = { _id: new ObjectId(sc.callId) };
       else filterId = { _id: sc.callId };
 
-      // Only update if not already paid to avoid double-updating
+      // Only update if not already paid to avoid double-updating AND only if status is closed
       bulkOps.push({
         updateOne: {
-          filter: { ...filterId, $or: [{ paymentStatus: { $exists: false } }, { paymentStatus: { $ne: "Paid" } }] },
+          filter: {
+            ...filterId,
+            $and: [
+              { $or: [{ paymentStatus: { $exists: false } }, { paymentStatus: { $ne: "Paid" } }] },
+              { status: { $regex: "closed|completed|done|resolved|finished", $options: "i" } },
+            ],
+          },
           update: {
             $set: {
               paymentStatus: "Paid",
@@ -210,7 +205,7 @@ async function handler(req, res, user) {
     }
 
     // 2) For entries WITHOUT callId: try to update matching docs by normalized name/phone/address + price
-    //    We will use regex clauses (case-insensitive) but include price equality to avoid wrong matches.
+    //    but only update documents that are closed (avoid marking open jobs paid)
     for (const sc of storedCalls.filter((s) => !s.callId)) {
       const clauses = [];
       if (sc.clientName) clauses.push({ clientName: { $regex: new RegExp(escapeRegExp(sc.clientName), "i") } });
@@ -219,11 +214,12 @@ async function handler(req, res, user) {
 
       if (clauses.length === 0) continue;
 
-      // Filter: any of the clauses, price equals, and not already paid
+      // Filter: any of the clauses, price equals, status closed, and not already paid
       const filter = {
         $and: [
           { $or: clauses },
           { price: safeNumber(sc.price) },
+          { status: { $regex: "closed|completed|done|resolved|finished", $options: "i" } },
           { $or: [{ paymentStatus: { $exists: false } }, { paymentStatus: { $ne: "Paid" } }] },
         ],
       };
@@ -260,7 +256,6 @@ async function handler(req, res, user) {
       try {
         const bulkResult = await callsColl.bulkWrite(bulkOps, { ordered: false });
         // bulkResult contains nModified / modifiedCount depending on driver
-        // Sum up modified counts (different drivers expose different props)
         updatedCount = (bulkResult.modifiedCount ?? 0) + (bulkResult.nModified ?? 0);
       } catch (bulkErr) {
         // Bulk may error (partial). Still continue but log.
