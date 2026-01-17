@@ -3,6 +3,8 @@ import bcrypt from "bcryptjs";
 import { signToken } from "../../../lib/auth.js";
 import { serialize } from "cookie";
 
+const TEN_YEARS_IN_SECONDS = 60 * 60 * 24 * 365 * 10; // 315360000
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).end();
@@ -38,7 +40,8 @@ export default async function handler(req, res) {
       path: "/",
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 30, // 30 days
+      maxAge: TEN_YEARS_IN_SECONDS,
+      secure: process.env.NODE_ENV === "production",
     })
   );
 

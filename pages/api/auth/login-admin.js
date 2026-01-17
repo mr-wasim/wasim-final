@@ -3,6 +3,8 @@ import { getDb } from "../../../lib/api-helpers.js";
 import bcrypt from "bcryptjs";
 import { serialize } from "cookie";
 
+const TEN_YEARS_IN_SECONDS = 60 * 60 * 24 * 365 * 10; // 315360000
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -32,21 +34,22 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // JWT
+    // JWT (no expiry)
     const token = signToken({
       id: admin._id.toString(),
       username: admin.username,
       role: "admin",
     });
 
-    // cookie
+    // cookie — very long lifetime (10 years)
     res.setHeader(
       "Set-Cookie",
       serialize("token", token, {
         path: "/",
         httpOnly: true,
         sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 30,
+        maxAge: TEN_YEARS_IN_SECONDS,
+        secure: process.env.NODE_ENV === "production",
       })
     );
 
