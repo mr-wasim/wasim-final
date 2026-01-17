@@ -195,7 +195,7 @@ export default function Payments() {
     loadCalls();
   }, [user, loadCalls]);
 
-  // ✅ Firebase Push Notification Setup (lazy load, non-blocking)
+  // Firebase (unchanged)
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -224,7 +224,6 @@ export default function Payments() {
 
         if (mounted && token) {
           setDeviceToken(token);
-          // fire-and-forget, no await (⚡ non-blocking)
           fetch("/api/save-fcm-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -301,7 +300,6 @@ export default function Payments() {
   }, []);
 
   const updateSelectedAmount = useCallback((id, field, value) => {
-    // Ensure only numbers and no negative
     const val = value === "" ? "" : String(value).replace(/[^\d.-]/g, "");
     setSelectedCalls((prev) => prev.map((c) => (c._id === id ? { ...c, [field]: val } : c)));
   }, []);
@@ -355,6 +353,36 @@ export default function Payments() {
     if (showAllInModal) return sorted;
     return sorted.slice(0, defaultLimit);
   }, [calls, callSearch, modalTab, showAllInModal]);
+
+  // ----------------------------
+  // MARK AS PAID (temporary visual fix)
+  // ----------------------------
+  const markCallAsPaid = useCallback(
+    async (callId) => {
+      if (!callId) return toast.error("callId missing");
+      try {
+        // call API to mark forwarded_calls.paymentStatus = "Paid"
+        const r = await fetch("/api/tech/mark-as-paid", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callId }),
+        });
+        const d = await r.json();
+        if (!r.ok) return toast.error(d.error || d.message || "Failed to mark paid");
+
+        // update local calls array
+        setCalls((prev) => prev.map((c) => (c._id === callId ? { ...c, paymentStatus: "Paid" } : c)));
+        // also remove from selectedCalls if present
+        setSelectedCalls((prev) => prev.filter((c) => c._id !== callId));
+
+        toast.success("Marked as Paid (visual only)");
+      } catch (err) {
+        console.error("mark-as-paid error:", err);
+        toast.error("Failed to mark paid");
+      }
+    },
+    [setCalls, setSelectedCalls]
+  );
 
   // ----------------------------
   // Submit payment (calls -> /api/tech/payment)
@@ -516,7 +544,13 @@ export default function Payments() {
                           <div className="text-xs text-gray-500 line-clamp-1">{c.address || "-"}</div>
                           <div className="text-[11px] text-gray-400 mt-0.5">{c.type || "Service"} • ₹{c.price}</div>
                         </div>
-                        <button type="button" className="text-xs text-red-500 hover:text-red-600 flex-shrink-0" onClick={() => removeSelectedCall(c._id)}>✕ Remove</button>
+                        <div className="flex gap-2 items-start">
+                          <button type="button" className="text-xs text-red-500 hover:text-red-600 flex-shrink-0" onClick={() => removeSelectedCall(c._id)}>✕ Remove</button>
+                          {/* If technician wants to mark selected call as paid directly */}
+                          {c.paymentStatus !== "Paid" && (
+                            <button type="button" onClick={() => markCallAsPaid(c._id)} className="text-xs bg-yellow-500 px-2 py-1 rounded text-white">Mark as paid</button>
+                          )}
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -604,7 +638,7 @@ export default function Payments() {
                   const disabled = c.paymentStatus === "Paid";
 
                   return (
-                    <button key={c._id} type="button" onClick={() => !disabled && addCallToSelected(c)} disabled={disabled} className={`w-full border rounded-xl px-3 py-2 text-sm hover:bg-blue-50 text-left transition ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}>
+                    <div key={c._id} className={`w-full border rounded-xl px-3 py-2 text-sm text-left transition ${disabled ? "opacity-60" : ""}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="font-semibold truncate">{c.clientName || "Unknown"}</div>
@@ -613,9 +647,21 @@ export default function Payments() {
                           <div className="text-[11px] text-gray-400">{c.type || "Service"} • ₹{c.price}</div>
                         </div>
 
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${badgeClass}`}>{badgeText}</span>
+                        <div className="flex flex-col items-end gap-2">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${badgeClass}`}>{badgeText}</span>
+
+                          <div className="flex gap-2">
+                            {!disabled && (
+                              <>
+                                <button onClick={() => addCallToSelected(c)} className="bg-white border rounded px-2 py-1 text-xs">Select</button>
+                                <button onClick={() => markCallAsPaid(c._id)} className="bg-yellow-500 text-white rounded px-2 py-1 text-xs">Mark as paid</button>
+                              </>
+                            )}
+                            {disabled && <button className="bg-gray-100 text-gray-600 rounded px-2 py-1 text-xs cursor-not-allowed">Already paid</button>}
+                          </div>
+                        </div>
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
