@@ -2,40 +2,30 @@
 import { requireRole, getDb } from "../../../lib/api-helpers.js";
 import { ObjectId } from "mongodb";
 
-/**
- * Helper: normalize text for matching keys
- */
-function norm(str = "") {
-  return String(str || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^\w\d\s+,-]/g, "")
-    .trim();
-}
-
-/** Escape for regex */
-function escapeRegExp(string) {
-  return String(string || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Safe numeric */
+/** helpers **/
 function safeNumber(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
-
-/** Regex to match closed statuses (case-insensitive) */
+function escapeRegExp(string = "") {
+  return String(string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function normKey(clientName = "", phone = "", address = "", price = 0) {
+  return `${String(clientName || "").toLowerCase().trim()}|${String(phone || "").replace(/\D/g, "")}|${String(address || "").toLowerCase().trim()}|${safeNumber(price)}`;
+}
 const CLOSED_STATUS_REGEX = /closed|completed|done|resolved|finished/i;
 
 /**
  * POST /api/tech/payment
+ * - Strict: only closed forwarded_calls may be marked Paid
+ * - Prevent duplicate payments: rejects if any targeted forwarded_call is already Paid
+ * - Batched lookups for speed, single bulkWrite for updates
  */
 async function handler(req, res, user) {
   if (req.method !== "POST") return res.status(405).json({ success: false, error: "Method not allowed" });
 
   try {
     const body = req.body || {};
-
     const {
       receiver,
       mode,
@@ -45,7 +35,7 @@ async function handler(req, res, user) {
       calls = [],
     } = body;
 
-    // Basic validation
+    // basic shaped validation
     if (!receiver || typeof receiver !== "string" || !receiver.trim()) {
       return res.status(400).json({ success: false, error: "Receiver (paying name) is required" });
     }
@@ -60,7 +50,7 @@ async function handler(req, res, user) {
     const paymentsColl = db.collection("payments");
     const callsColl = db.collection("forwarded_calls");
 
-    // Normalize tech id for storage (store both raw and ObjectId when possible)
+    // tech info
     const techId = ObjectId.isValid(user.id) ? new ObjectId(user.id) : user.id;
     const techUsername = user.username || user.email || user.name || null;
 
@@ -68,77 +58,160 @@ async function handler(req, res, user) {
     const cash = safeNumber(cashAmount);
     const total = online + cash;
 
-    // Build sanitized calls array
-    const storedCalls = calls.map((c) => ({
-      callId: c.callId ? String(c.callId) : null,
-      clientName: c.clientName ? String(c.clientName) : "",
-      phone: c.phone ? String(c.phone) : "",
-      address: c.address ? String(c.address) : "",
-      type: c.type ? String(c.type) : "",
-      price: safeNumber(c.price),
-      onlineAmount: safeNumber(c.onlineAmount),
-      cashAmount: safeNumber(c.cashAmount),
-    }));
+    // normalize & dedupe input calls (by callId if present, else by normalized key)
+    const seen = new Set();
+    const storedCalls = [];
+    for (const c of calls) {
+      const callId = c.callId ? String(c.callId) : null;
+      const clientName = c.clientName ? String(c.clientName) : "";
+      const phone = c.phone ? String(c.phone) : "";
+      const address = c.address ? String(c.address) : "";
+      const price = safeNumber(c.price);
+      const onlineA = safeNumber(c.onlineAmount);
+      const cashA = safeNumber(c.cashAmount);
 
-    // SERVER-SIDE VALIDATION: price checks for entries with callId (strict)
-    // and also ensure entered amounts sum equals price.
+      const key = callId ? `id:${callId}` : normKey(clientName, phone, address, price);
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-    const callIdsWithId = storedCalls.filter((s) => s.callId).map((s) => s.callId);
-    const callObjectIds = [];
-    const callStringIds = [];
-    for (const id of callIdsWithId) {
-      if (ObjectId.isValid(id)) callObjectIds.push(new ObjectId(id));
-      else callStringIds.push(id);
+      storedCalls.push({
+        callId,
+        clientName,
+        phone,
+        address,
+        type: c.type ? String(c.type) : "",
+        price,
+        onlineAmount: onlineA,
+        cashAmount: cashA,
+      });
     }
 
-    const idQuery = [];
-    if (callObjectIds.length) idQuery.push({ _id: { $in: callObjectIds } });
-    if (callStringIds.length) idQuery.push({ _id: { $in: callStringIds } });
+    // Early check: total amounts must sum to provided totals (optional but useful)
+    // (Not strictly necessary if backend only trusts per-call amounts, but keep as sanity)
+    const sumPayload = storedCalls.reduce((s, x) => s + Number(x.onlineAmount || 0) + Number(x.cashAmount || 0), 0);
+    if (sumPayload !== total) {
+      // don't block — still allow, but warn (to be strict, we can reject)
+      // We'll reject to be consistent with previous strict behavior.
+      return res.status(400).json({ success: false, error: `Sum of per-call amounts (₹${sumPayload}) doesn't equal total (₹${total})` });
+    }
 
-    if (idQuery.length) {
-      const found = await callsColl.find({ $or: idQuery }).project({ _id: 1, price: 1, clientName: 1, phone: 1, address: 1, status: 1 }).toArray();
+    // Separate calls with callId and without
+    const withId = storedCalls.filter((s) => s.callId);
+    const withoutId = storedCalls.filter((s) => !s.callId);
+
+    // ---------- BATCH FETCH FOR callId entries ----------
+    const problemAlreadyPaid = [];
+    const problemNotFound = [];
+    const problemNotClosed = [];
+    const problemPriceMismatch = [];
+
+    const callIdObjIds = [];
+    const callIdStrs = [];
+    for (const s of withId) {
+      if (ObjectId.isValid(s.callId)) callIdObjIds.push(new ObjectId(s.callId));
+      else callIdStrs.push(s.callId);
+    }
+
+    if (callIdObjIds.length || callIdStrs.length) {
+      const q = [];
+      if (callIdObjIds.length) q.push({ _id: { $in: callIdObjIds } });
+      if (callIdStrs.length) q.push({ _id: { $in: callIdStrs } });
+      const found = await callsColl
+        .find({ $or: q })
+        .project({ _id: 1, price: 1, status: 1, paymentStatus: 1 })
+        .toArray();
+
       const foundMap = new Map(found.map((f) => [String(f._id), f]));
 
-      for (const sc of storedCalls) {
-        if (!sc.callId) continue;
+      for (const sc of withId) {
         const f = foundMap.get(String(sc.callId));
         if (!f) {
-          // call referenced but not found - reject to avoid silent mismatches
-          return res.status(400).json({ success: false, error: `Call not found: ${sc.callId}` });
+          problemNotFound.push(sc.callId);
+          continue;
         }
-        const expectedPrice = safeNumber(f.price);
+        // price check
+        const expected = safeNumber(f.price);
         const entered = Number(sc.onlineAmount || 0) + Number(sc.cashAmount || 0);
-        if (entered !== expectedPrice) {
-          return res.status(400).json({
-            success: false,
-            error: `Price mismatch for call ${sc.callId}. Expected ₹${expectedPrice}, entered ₹${entered}`,
-          });
+        if (entered !== expected) {
+          problemPriceMismatch.push({ callId: sc.callId, expected, entered });
         }
-
-        // ENFORCEMENT: require that the forwarded_call is in a closed status before accepting payment
-        const docStatus = f.status || "";
-        if (!CLOSED_STATUS_REGEX.test(docStatus)) {
-          return res.status(400).json({
-            success: false,
-            error: `Call ${sc.callId} is not closed. Only closed calls are allowed to be marked as paid.`,
-          });
+        // closed check
+        const status = f.status || "";
+        if (!CLOSED_STATUS_REGEX.test(status)) {
+          problemNotClosed.push({ callId: sc.callId, status });
+        }
+        // already paid
+        if (String(f.paymentStatus || "").toLowerCase() === "paid") {
+          problemAlreadyPaid.push(String(f._id));
         }
       }
     }
 
-    // For calls without callId: ensure entered amounts equal provided price in payload (server-side check)
-    for (const sc of storedCalls) {
-      if (sc.callId) continue;
-      const entered = Number(sc.onlineAmount || 0) + Number(sc.cashAmount || 0);
-      if (entered !== sc.price) {
-        return res.status(400).json({
-          success: false,
-          error: `Price mismatch for customer ${sc.clientName || sc.phone || "unknown"}. Expected ₹${sc.price}, entered ₹${entered}`,
+    // ---------- BATCH FETCH FOR non-callId entries ----------
+    // Build OR filters (one per stored sc) to fetch possible matching forwarded_calls in one query
+    let matchedDocsForNoId = [];
+    if (withoutId.length) {
+      const orFilters = [];
+      for (const sc of withoutId) {
+        const clauses = [];
+        if (sc.clientName) clauses.push({ clientName: { $regex: new RegExp(escapeRegExp(sc.clientName), "i") } });
+        if (sc.phone) clauses.push({ phone: { $regex: new RegExp(escapeRegExp(sc.phone), "i") } });
+        if (sc.address) clauses.push({ address: { $regex: new RegExp(escapeRegExp(sc.address), "i") } });
+        if (clauses.length === 0) continue;
+        orFilters.push({
+          $and: [
+            { $or: clauses },
+            { price: sc.price },
+          ],
         });
       }
+      if (orFilters.length) {
+        matchedDocsForNoId = await callsColl
+          .find({ $or: orFilters })
+          .project({ _id: 1, price: 1, status: 1, paymentStatus: 1, clientName: 1, phone: 1, address: 1 })
+          .toArray();
+      }
+      // analyze matches: if any matched doc is already Paid or not closed => flag
+      for (const doc of matchedDocsForNoId) {
+        if (String(doc.paymentStatus || "").toLowerCase() === "paid") {
+          problemAlreadyPaid.push(String(doc._id));
+        } else if (!CLOSED_STATUS_REGEX.test(doc.status || "")) {
+          problemNotClosed.push({ id: String(doc._id), status: doc.status || "" });
+        }
+      }
     }
 
-    // Prepare paymentDoc (include tech info)
+    // If there are any blocking problems, reject early with 409/400
+    if (problemAlreadyPaid.length) {
+      return res.status(409).json({
+        success: false,
+        error: "Some calls are already marked Paid. Preventing duplicate payment submission.",
+        paidCallIds: problemAlreadyPaid,
+      });
+    }
+    if (problemNotFound.length) {
+      return res.status(400).json({
+        success: false,
+        error: "Some provided callIds were not found",
+        notFoundCallIds: problemNotFound,
+      });
+    }
+    if (problemPriceMismatch.length) {
+      return res.status(400).json({
+        success: false,
+        error: "Price mismatch for some calls",
+        mismatches: problemPriceMismatch,
+      });
+    }
+    if (problemNotClosed.length) {
+      return res.status(400).json({
+        success: false,
+        error: "Some calls are not in closed/completed status and therefore cannot be paid",
+        notClosed: problemNotClosed,
+      });
+    }
+
+    // ---------- All validations passed -> create payment doc ----------
     const paymentDoc = {
       techId,
       techUsername,
@@ -156,39 +229,31 @@ async function handler(req, res, user) {
       },
     };
 
-    // Insert payment doc
     const insertResult = await paymentsColl.insertOne(paymentDoc);
     const paymentId = insertResult.insertedId ? String(insertResult.insertedId) : null;
 
-    // Build bulk update ops for forwarded_calls
+    // ---------- Build bulk ops (only closed + not already paid) ----------
     const bulkOps = [];
     const updatedCallIds = [];
     const updatedByNamePhoneMatches = [];
 
-    // 1) For entries with callId - update specific docs (only those not already Paid)
-    for (const sc of storedCalls) {
-      if (!sc.callId) continue;
-      // prefer ObjectId if valid
-      let filterId;
-      if (ObjectId.isValid(sc.callId)) filterId = { _id: new ObjectId(sc.callId) };
-      else filterId = { _id: sc.callId };
+    // for callId entries
+    for (const sc of storedCalls.filter((s) => s.callId)) {
+      let filter;
+      if (ObjectId.isValid(sc.callId)) filter = { _id: new ObjectId(sc.callId) };
+      else filter = { _id: sc.callId };
 
-      // Only update if not already paid to avoid double-updating AND only if status is closed
+      // additional safety: only update if not already Paid and status closed
+      filter.$and = [
+        { $or: [{ paymentStatus: { $exists: false } }, { paymentStatus: { $ne: "Paid" } }] },
+        { status: { $regex: "closed|completed|done|resolved|finished", $options: "i" } },
+      ];
+
       bulkOps.push({
         updateOne: {
-          filter: {
-            ...filterId,
-            $and: [
-              { $or: [{ paymentStatus: { $exists: false } }, { paymentStatus: { $ne: "Paid" } }] },
-              { status: { $regex: "closed|completed|done|resolved|finished", $options: "i" } },
-            ],
-          },
+          filter,
           update: {
-            $set: {
-              paymentStatus: "Paid",
-              paymentRef: paymentId,
-              paymentAt: new Date(),
-            },
+            $set: { paymentStatus: "Paid", paymentRef: paymentId, paymentAt: new Date() },
             $push: {
               payments: {
                 paymentId,
@@ -204,8 +269,7 @@ async function handler(req, res, user) {
       updatedCallIds.push(sc.callId);
     }
 
-    // 2) For entries WITHOUT callId: try to update matching docs by normalized name/phone/address + price
-    //    but only update documents that are closed (avoid marking open jobs paid)
+    // for non-callId entries -> updateMany with OR clauses + price + closed + not-paid
     for (const sc of storedCalls.filter((s) => !s.callId)) {
       const clauses = [];
       if (sc.clientName) clauses.push({ clientName: { $regex: new RegExp(escapeRegExp(sc.clientName), "i") } });
@@ -214,7 +278,6 @@ async function handler(req, res, user) {
 
       if (clauses.length === 0) continue;
 
-      // Filter: any of the clauses, price equals, status closed, and not already paid
       const filter = {
         $and: [
           { $or: clauses },
@@ -224,16 +287,11 @@ async function handler(req, res, user) {
         ],
       };
 
-      // updateMany to mark all matches (lifetime behavior)
       bulkOps.push({
         updateMany: {
           filter,
           update: {
-            $set: {
-              paymentStatus: "Paid",
-              paymentRef: paymentId,
-              paymentAt: new Date(),
-            },
+            $set: { paymentStatus: "Paid", paymentRef: paymentId, paymentAt: new Date() },
             $push: {
               payments: {
                 paymentId,
@@ -250,20 +308,18 @@ async function handler(req, res, user) {
       updatedByNamePhoneMatches.push({ name: sc.clientName, phone: sc.phone, address: sc.address, price: sc.price });
     }
 
-    // Execute bulk if we have ops
+    // ---------- Execute bulkWrite (if ops present) ----------
     let updatedCount = 0;
     if (bulkOps.length > 0) {
       try {
         const bulkResult = await callsColl.bulkWrite(bulkOps, { ordered: false });
-        // bulkResult contains nModified / modifiedCount depending on driver
         updatedCount = (bulkResult.modifiedCount ?? 0) + (bulkResult.nModified ?? 0);
       } catch (bulkErr) {
-        // Bulk may error (partial). Still continue but log.
+        // partial failures may occur; log and continue - payment doc is already inserted
         console.error("bulkWrite error:", bulkErr);
       }
     }
 
-    // Return response with what we updated
     return res.status(200).json({
       success: true,
       paymentId,

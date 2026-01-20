@@ -355,36 +355,6 @@ export default function Payments() {
   }, [calls, callSearch, modalTab, showAllInModal]);
 
   // ----------------------------
-  // MARK AS PAID (temporary visual fix)
-  // ----------------------------
-  const markCallAsPaid = useCallback(
-    async (callId) => {
-      if (!callId) return toast.error("callId missing");
-      try {
-        // call API to mark forwarded_calls.paymentStatus = "Paid"
-        const r = await fetch("/api/tech/mark-as-paid", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ callId }),
-        });
-        const d = await r.json();
-        if (!r.ok) return toast.error(d.error || d.message || "Failed to mark paid");
-
-        // update local calls array
-        setCalls((prev) => prev.map((c) => (c._id === callId ? { ...c, paymentStatus: "Paid" } : c)));
-        // also remove from selectedCalls if present
-        setSelectedCalls((prev) => prev.filter((c) => c._id !== callId));
-
-        toast.success("Marked as Paid (visual only)");
-      } catch (err) {
-        console.error("mark-as-paid error:", err);
-        toast.error("Failed to mark paid");
-      }
-    },
-    [setCalls, setSelectedCalls]
-  );
-
-  // ----------------------------
   // Submit payment (calls -> /api/tech/payment)
   // ----------------------------
   const submit = useCallback(
@@ -399,6 +369,10 @@ export default function Payments() {
       const sigPresent = Boolean(receiverSignature) && !(sigRef.current && sigRef.current.isEmpty && sigRef.current.isEmpty());
       if (!sigPresent) return toast.error("Receiver signature required");
 
+      // double-check none of the selected calls are already Paid (safety)
+      const alreadyPaid = selectedCalls.filter((c) => c.paymentStatus === "Paid").map((c) => c._id);
+      if (alreadyPaid.length) return toast.error("Some selected calls are already paid — remove them before submitting");
+
       let mode = "";
       if (totalOnline > 0 && totalCash > 0) mode = "Both";
       else if (totalOnline > 0) mode = "Online";
@@ -407,13 +381,23 @@ export default function Payments() {
       if (!mode) return toast.error("Please enter at least one amount (online/cash)");
 
       try {
+        // dedupe selectedCalls by id (safety)
+        const uniqueCalls = [];
+        const seen = new Set();
+        for (const c of selectedCalls) {
+          if (!seen.has(c._id)) {
+            seen.add(c._id);
+            uniqueCalls.push(c);
+          }
+        }
+
         const payload = {
           receiver: form.receiver,
           mode,
           onlineAmount: String(totalOnline),
           cashAmount: String(totalCash),
           receiverSignature,
-          calls: selectedCalls.map((c) => ({
+          calls: uniqueCalls.map((c) => ({
             callId: c._id,
             clientName: c.clientName,
             phone: c.phone,
@@ -432,10 +416,13 @@ export default function Payments() {
         });
 
         const d = await r.json();
-        if (!r.ok) return toast.error(d.message || d.error || "Failed to record payment");
+        if (!r.ok) {
+          // backend will return helpful message if duplicate or other error
+          return toast.error(d.message || d.error || "Failed to record payment");
+        }
 
         // Optimistic local update for instant UX
-        const paidCallIds = selectedCalls.map((c) => c._id);
+        const paidCallIds = uniqueCalls.map((c) => c._id);
         setCalls((prev) => prev.map((c) => (paidCallIds.includes(c._id) ? { ...c, paymentStatus: "Paid" } : c)));
 
         // 🔊 SOUND
@@ -546,10 +533,6 @@ export default function Payments() {
                         </div>
                         <div className="flex gap-2 items-start">
                           <button type="button" className="text-xs text-red-500 hover:text-red-600 flex-shrink-0" onClick={() => removeSelectedCall(c._id)}>✕ Remove</button>
-                          {/* If technician wants to mark selected call as paid directly */}
-                          {c.paymentStatus !== "Paid" && (
-                            <button type="button" onClick={() => markCallAsPaid(c._id)} className="text-xs bg-yellow-500 px-2 py-1 rounded text-white">Mark as paid</button>
-                          )}
                         </div>
                       </div>
 
@@ -652,10 +635,7 @@ export default function Payments() {
 
                           <div className="flex gap-2">
                             {!disabled && (
-                              <>
-                                <button onClick={() => addCallToSelected(c)} className="bg-white border rounded px-2 py-1 text-xs">Select</button>
-                                <button onClick={() => markCallAsPaid(c._id)} className="bg-yellow-500 text-white rounded px-2 py-1 text-xs">Mark as paid</button>
-                              </>
+                              <button onClick={() => addCallToSelected(c)} className="bg-white border rounded px-2 py-1 text-xs">Select</button>
                             )}
                             {disabled && <button className="bg-gray-100 text-gray-600 rounded px-2 py-1 text-xs cursor-not-allowed">Already paid</button>}
                           </div>
